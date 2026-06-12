@@ -30,6 +30,7 @@ This project trains a neural network to play Snake by learning from a rule-based
 - **Honest evaluation** — separate evaluation loop with no teacher (true learned skill)
 - **Hamiltonian cycle teacher** with corner-cutting shortcuts (provably collision-free)
 - **Full reproducibility** — includes pretrained checkpoint + training logs
+- **Hyperparameter sweeps & benchmarking** — CLI overrides (`--lr`, `--dagger-prob-max`, `--curriculum-prob`, `--run-name`) for isolated, comparable runs, plus `tools/benchmark.py` for head-to-head checkpoint comparison
 
 ### UI Gallery (Before & After)
 
@@ -169,6 +170,25 @@ Simple GUI to launch training, watch games, view stats, and stop processes.
 python src/train_ai.py --watch --pretrained --games 25
 ```
 
+#### 7. **Hyperparameter Sweep Run**
+
+```bash
+python src/train_ai.py --headless --run-name sweep_lr0.001 \
+    --lr 0.001 --dagger-prob-max 0.5 --curriculum-prob 0.3
+```
+
+Override `LR`, `DAGGER_PROB_MAX`, or `CURRICULUM_PROB` for a single run. `--run-name` isolates checkpoints and `learning_curve.png` under `model/<run-name>/`, so sweeps don't clobber each other or the main run — each checkpoint also stores its `run_config` for traceability. Or use the **New Sweep Run** dashboard in `launcher.py`.
+
+#### 8. **Benchmark Checkpoints**
+
+```bash
+python tools/benchmark.py --checkpoint checkpoint_best.pth \
+    --checkpoint sweep_lr0.001/checkpoint_best.pth \
+    --games 100 --seed 42 --plot benchmark.png
+```
+
+Runs N games per checkpoint and reports full score distributions (mean/median/std/percentiles/win rate) plus a side-by-side comparison table — sharper signal than avg/max alone. Or use the **Benchmark Models** dashboard in `launcher.py`.
+
 ### Project Structure
 
 | File | Purpose |
@@ -178,6 +198,7 @@ python src/train_ai.py --watch --pretrained --games 25
 | `src/train_ai.py` | Network (`SnakeNet`), replay buffer, trainer, agent, main training/eval loop |
 | `launcher.py` | Tkinter control panel for easy access to all features |
 | `tools/record_demo.py` | Utility to record gameplay as animated GIFs |
+| `tools/benchmark.py` | Benchmark harness — run N games per checkpoint, report score distributions & comparisons |
 
 ### Understanding the Code
 
@@ -234,13 +255,9 @@ python src/train_ai.py --watch --pretrained --games 25
 
 Planned next steps, grouped by track. Tracks aren't strictly sequential — some have dependencies, noted inline.
 
-#### Foundation
-
-- **Benchmark harness** — script to run N games across one or more checkpoints and report full score distributions (not just avg/max). Sharper signal for comparing hyperparameters/architectures, and the base for the tournament/leaderboard below.
-
 #### Track A — Model quality (current BC + DAgger pipeline)
 
-- Hyperparameter sweeps: `DAGGER_PROB_MAX` (0.7), `CURRICULUM_PROB`, `LR`, evaluated via the benchmark harness
+- Run sweeps over `DAGGER_PROB_MAX` (0.7), `CURRICULUM_PROB`, `LR` using `--run-name` + `tools/benchmark.py`, and compare results
 - `SnakeNet` architecture experiments — residual blocks, deeper conv stack, alternative FC sizes
 - Longer training runs beyond the current 275-game checkpoint
 
