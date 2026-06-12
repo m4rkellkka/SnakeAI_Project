@@ -7,25 +7,29 @@ import sys
 # Project working directory
 DIR = os.path.dirname(os.path.abspath(__file__))
 
+# Core scripts live in src/
+TRAIN_AI = os.path.join("src", "train_ai.py")
+TEACHER = os.path.join("src", "teacher.py")
+
 
 def run_training():
     print("Starting training...")
-    subprocess.Popen([sys.executable, "train_ai.py"], cwd=DIR)
+    subprocess.Popen([sys.executable, TRAIN_AI], cwd=DIR)
 
 
 def run_exam():
     print("Running exam (current model)...")
-    subprocess.Popen([sys.executable, "train_ai.py", "--watch", "--games", "10"], cwd=DIR)
+    subprocess.Popen([sys.executable, TRAIN_AI, "--watch", "--games", "10"], cwd=DIR)
 
 
 def run_algo():
     print("Running perfect algorithm...")
-    subprocess.Popen([sys.executable, "teacher.py"], cwd=DIR)
+    subprocess.Popen([sys.executable, TEACHER], cwd=DIR)
 
 
 def run_pretrained():
     print("Running pretrained model...")
-    subprocess.Popen([sys.executable, "train_ai.py", "--watch", "--pretrained", "--games", "10"], cwd=DIR)
+    subprocess.Popen([sys.executable, TRAIN_AI, "--watch", "--pretrained", "--games", "10"], cwd=DIR)
 
 
 def view_stats():

@@ -42,7 +42,7 @@ This project trains a neural network to play Snake by learning from a rule-based
 Relative to current heading: `[straight, turn right, turn left]` (not absolute directions)
 
 #### The Teacher
-`teacher.py`: Hamiltonian-cycle algorithm that:
+`src/teacher.py`: Hamiltonian-cycle algorithm that:
 1. Follows a fixed cycle visiting all 256 grid cells (serpentine + highway back)
 2. Takes corner-cutting shortcuts to reach food faster
 3. Has two safety nets ensuring collision-free movement
@@ -93,19 +93,19 @@ pip install -r requirements.txt
 
 #### 1. **Watch the Pretrained Model**
 ```bash
-python train_ai.py --watch --pretrained --games 5
+python src/train_ai.py --watch --pretrained --games 5
 ```
 Load the best trained model and watch it play 5 games (recommended: see it in action first).
 
 #### 2. **Watch the Perfect Teacher**
 ```bash
-python teacher.py
+python src/teacher.py
 ```
 Runs the Hamiltonian-cycle algorithm in real-time. Shows 100% win rate.
 
 #### 3. **Train Your Own Model**
 ```bash
-python train_ai.py
+python src/train_ai.py
 ```
 Starts training from scratch (or resumes from `model/checkpoint_last.pth` if it exists).
 - Ctrl+C to stop gracefully
@@ -113,7 +113,7 @@ Starts training from scratch (or resumes from `model/checkpoint_last.pth` if it 
 
 #### 4. **Test Current Model (No Pretrained)**
 ```bash
-python train_ai.py --watch --games 10
+python src/train_ai.py --watch --games 10
 ```
 Load the best checkpoint from your training run.
 
@@ -125,16 +125,16 @@ Simple GUI to launch training, watch games, view stats, and stop processes.
 
 #### 6. **Custom Game Count**
 ```bash
-python train_ai.py --watch --pretrained --games 25
+python src/train_ai.py --watch --pretrained --games 25
 ```
 
 ### Project Structure
 
 | File | Purpose |
 |------|---------|
-| `snake_game.py` | Game engine (`SnakeGameAI`), grid constants, Hamiltonian cycle |
-| `teacher.py` | Perfect Hamiltonian-cycle algorithm with shortcuts; runnable demo |
-| `train_ai.py` | Network (`SnakeNet`), replay buffer, trainer, agent, main training/eval loop |
+| `src/snake_game.py` | Game engine (`SnakeGameAI`), grid constants, Hamiltonian cycle |
+| `src/teacher.py` | Perfect Hamiltonian-cycle algorithm with shortcuts; runnable demo |
+| `src/train_ai.py` | Network (`SnakeNet`), replay buffer, trainer, agent, main training/eval loop |
 | `launcher.py` | Tkinter control panel for easy access to all features |
 | `tools/record_demo.py` | Utility to record gameplay as animated GIFs |
 
@@ -156,7 +156,7 @@ python train_ai.py --watch --pretrained --games 25
 
 ### Customization
 
-**Hyperparameters** (edit `train_ai.py`):
+**Hyperparameters** (edit `src/train_ai.py`):
 - `BATCH_SIZE` — Training batch size (default 128)
 - `LR` — Learning rate (default 0.0005)
 - `DAGGER_PROB_MAX` — Max probability of network-driven steps (default 0.7)
@@ -179,7 +179,7 @@ python train_ai.py --watch --pretrained --games 25
 - Normal — rendering is throttled. Speed keys still work. Training finishes normally.
 
 **Out of memory?**
-- Reduce `MAX_MEMORY` (replay buffer capacity) in `train_ai.py`
+- Reduce `MAX_MEMORY` (replay buffer capacity) in `src/train_ai.py`
 
 ### License
 

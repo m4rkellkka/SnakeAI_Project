@@ -12,3 +12,6 @@ model/checkpoint_best.pth
 .claude/
 venv/
 .venv/
+
+# AI assistant guidance — kept locally only
+CLAUDE.md

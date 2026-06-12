@@ -19,8 +19,8 @@ import numpy as np
 from PIL import Image
 import torch
 
-# Add parent directory to path so we can import from root
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Add src/ directory to path so we can import the game and agent modules
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'src'))
 
 from snake_game import SnakeGameAI
 from train_ai import Agent
