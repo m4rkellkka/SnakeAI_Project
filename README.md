@@ -265,6 +265,7 @@ Planned next steps, grouped by track. Tracks aren't strictly sequential — some
 - Table of contents for easier navigation
 - Mermaid diagram of the training pipeline (env → teacher/DAgger → trainer → checkpoint → eval)
 - Optional: browser-playable demo (pygame → wasm via `pygbag`)
+- **Standalone Application** — create a fully self-contained executable so anyone can run the program on their OS out-of-the-box like a regular application, without installing Python, Visual Studio, or other dependencies
 
 ### License
 

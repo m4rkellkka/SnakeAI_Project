@@ -265,6 +265,7 @@ python src/train_ai.py --watch --pretrained --games 25
 - Содержание (Table of Contents) для удобной навигации
 - Mermaid-диаграмма пайплайна обучения (env → teacher/DAgger → trainer → checkpoint → eval)
 - Опционально: демо в браузере (pygame → wasm через `pygbag`)
+- **Standalone-приложение** — создание полноценного исполняемого приложения, чтобы любой человек мог запустить программу на своей ОС как обычную программу, без установки Python, Visual Studio и прочих зависимостей
 
 ### Лицензия
 
