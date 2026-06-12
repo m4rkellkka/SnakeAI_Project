@@ -307,22 +307,25 @@ def evaluate(agent, game, num_games):
     return sum(scores) / len(scores), max(scores)
 
 
-def train():
+def train(headless=False):
     agent = Agent()
-    game = SnakeGameAI(w=640, h=640, num_apples=NUM_APPLES)
+    game = SnakeGameAI(w=640, h=640, num_apples=NUM_APPLES, headless=headless)
     game.speed = 0  # Uncapped FPS — rendering is throttled in snake_game.py
 
     loaded = agent.load_checkpoint('checkpoint_last.pth', load_optimizer=True)
     if loaded:
         print(f"Resuming: games={agent.n_games}, steps={agent.total_steps}, "
-              f"best honest eval={agent.best_eval_score:.1f}")
+              f"best honest eval={agent.best_eval_score:.1f}", flush=True)
 
     game_loss = 0.0
     game_batches = 0
     episode_dagger = False
     current_is_curriculum = False
 
-    print("Training started... '+'/'-' adjust speed, '0' for max FPS.")
+    if headless:
+        print("Training started (headless mode — no game window).", flush=True)
+    else:
+        print("Training started... '+'/'-' adjust speed, '0' for max FPS.", flush=True)
 
     while True:
         state_old = agent.get_state(game)
@@ -363,7 +366,8 @@ def train():
             tag = f" [{','.join(tags)}]" if tags else ''
 
             print(f'Game: {agent.n_games}{tag} | Score: {score} | Loss: {avg_loss:.4f} | '
-                  f'Steps: {agent.total_steps} | DAgger: {dagger_prob(agent.total_steps):.2f}')
+                  f'Steps: {agent.total_steps} | DAgger: {dagger_prob(agent.total_steps):.2f}',
+                  flush=True)
 
             if agent.n_games % EVAL_EVERY_N_GAMES == 0:
                 avg_eval, max_eval = evaluate(agent, game, EVAL_GAMES)
@@ -371,12 +375,13 @@ def train():
                 agent.eval_avg_history.append(avg_eval)
                 agent.eval_max_history.append(max_eval)
                 print(f'  >> Honest eval: avg={avg_eval:.1f}, max={max_eval} '
-                      f'({EVAL_GAMES} games)')
+                      f'({EVAL_GAMES} games)', flush=True)
 
                 if avg_eval > agent.best_eval_score:
                     agent.best_eval_score = avg_eval
                     agent.save_checkpoint('checkpoint_best.pth', eval_score=avg_eval)
-                    print(f'  >> New best honest eval: {avg_eval:.1f} -> checkpoint_best.pth')
+                    print(f'  >> New best honest eval: {avg_eval:.1f} -> checkpoint_best.pth',
+                          flush=True)
 
             if agent.n_games % SAVE_EVERY_N_GAMES == 0:
                 agent.save_checkpoint(
@@ -442,9 +447,11 @@ if __name__ == '__main__':
     parser.add_argument('--games', type=int, default=10, help='Number of games to watch (default 10)')
     parser.add_argument('--pretrained', action='store_true',
                          help='For --watch: load pretrained model (model/pretrained.pth)')
+    parser.add_argument('--headless', action='store_true',
+                         help='Train without a game window (for use by launcher dashboard)')
     args = parser.parse_args()
 
     if args.watch:
         watch(num_games=args.games, pretrained=args.pretrained)
     else:
-        train()
+        train(headless=args.headless)

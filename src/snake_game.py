@@ -1,11 +1,19 @@
 import pygame
 import random
+import math
 from enum import Enum
 from collections import namedtuple
 import numpy as np
 
-pygame.init()
-font = pygame.font.Font(pygame.font.get_default_font(), 25)
+# Defer pygame.init() — only initialize when needed (not in headless mode)
+_pygame_initialized = False
+
+def _ensure_pygame():
+    global _pygame_initialized
+    if not _pygame_initialized:
+        pygame.init()
+        _pygame_initialized = True
+
 
 class Direction(Enum):
     RIGHT = 1
@@ -55,19 +63,104 @@ for x in range(GRID_SIZE - 2, -1, -1):
 # speed-control keys work), but rendering cost drops dramatically.
 RENDER_EVERY_N_FRAMES = 1000
 
+
+# ──────────────────────────────────────────────────
+# Premium color palette
+# ──────────────────────────────────────────────────
+_BG_COLOR = (13, 15, 18)
+_GRID_LINE_COLOR = (28, 32, 38)
+_GRID_DOT_COLOR = (35, 40, 48)
+
+# Snake gradient: bright green head → dark teal tail
+_SNAKE_HEAD_COLOR = (0, 230, 120)
+_SNAKE_HEAD_GLOW = (0, 255, 140)
+_SNAKE_BODY_START = (0, 200, 100)
+_SNAKE_BODY_END = (0, 80, 60)
+_SNAKE_EYE_WHITE = (240, 240, 240)
+_SNAKE_EYE_PUPIL = (20, 20, 20)
+
+# Food
+_FOOD_COLOR = (255, 60, 80)
+_FOOD_GLOW_COLOR = (255, 40, 60)
+
+# HUD
+_HUD_BG = (0, 0, 0, 140)
+_HUD_TEXT_COLOR = (220, 230, 220)
+_HUD_ACCENT = (0, 220, 110)
+
+# Score popup
+_SCORE_POPUP_COLOR = (0, 255, 140)
+
+
+def _lerp_color(c1, c2, t):
+    """Linearly interpolate between two RGB colors."""
+    t = max(0.0, min(1.0, t))
+    return (
+        int(c1[0] + (c2[0] - c1[0]) * t),
+        int(c1[1] + (c2[1] - c1[1]) * t),
+        int(c1[2] + (c2[2] - c1[2]) * t),
+    )
+
+
 class SnakeGameAI:
-    def __init__(self, w=640, h=640, num_apples=3):
+    def __init__(self, w=640, h=640, num_apples=3, headless=False):
         self.w = w
         self.h = h
         self.num_apples = num_apples
         self.speed = 80 # Initial game speed
         self._render_counter = 0 # Frame counter for render throttling
+        self.headless = headless
+        self._frame_tick = 0  # For animations (food pulse, etc.)
 
-        # Screen setup
-        self.display = pygame.display.set_mode((self.w, self.h))
-        pygame.display.set_caption('Snake AI')
-        self.clock = pygame.time.Clock()
+        if not headless:
+            _ensure_pygame()
+            # Screen setup
+            self.display = pygame.display.set_mode((self.w, self.h))
+            pygame.display.set_caption('Snake AI')
+            self.clock = pygame.time.Clock()
+            self._font_large = pygame.font.SysFont('Helvetica Neue,Helvetica,Arial', 22, bold=True)
+            self._font_small = pygame.font.SysFont('Helvetica Neue,Helvetica,Arial', 14)
+
+            # Pre-render the grid background (static — only done once)
+            self._grid_surface = self._build_grid_surface()
+
+            # Glow surface for food (pre-computed for performance)
+            self._food_glow_surface = self._build_glow_surface(BLOCK_SIZE // 2, _FOOD_GLOW_COLOR, alpha=40)
+            self._head_glow_surface = self._build_glow_surface(BLOCK_SIZE // 2, _SNAKE_HEAD_GLOW, alpha=30)
+        else:
+            self.display = None
+            self.clock = None
+
         self.reset()
+
+    def _build_grid_surface(self):
+        """Pre-render the dark grid background with subtle lines and corner dots."""
+        surf = pygame.Surface((self.w, self.h))
+        surf.fill(_BG_COLOR)
+
+        # Subtle grid lines
+        for x in range(0, self.w + 1, BLOCK_SIZE):
+            pygame.draw.line(surf, _GRID_LINE_COLOR, (x, 0), (x, self.h))
+        for y in range(0, self.h + 1, BLOCK_SIZE):
+            pygame.draw.line(surf, _GRID_LINE_COLOR, (0, y), (self.w, y))
+
+        # Small dots at grid intersections for premium feel
+        for x in range(0, self.w + 1, BLOCK_SIZE):
+            for y in range(0, self.h + 1, BLOCK_SIZE):
+                pygame.draw.circle(surf, _GRID_DOT_COLOR, (x, y), 1)
+
+        return surf
+
+    def _build_glow_surface(self, radius, color, alpha=60):
+        """Create a soft radial glow surface."""
+        size = radius * 2
+        surf = pygame.Surface((size, size), pygame.SRCALPHA)
+        center = radius
+        for r in range(radius, 0, -1):
+            a = int(alpha * (r / radius) ** 2)
+            a = max(0, min(255, a))
+            pygame.draw.circle(surf, (*color, a), (center, center), r)
+        return surf
 
     @property
     def grid_cells(self):
@@ -139,22 +232,24 @@ class SnakeGameAI:
 
     def play_step(self, action):
         self.frame_iteration += 1
+        self._frame_tick += 1
 
         # 1. Collect user events (including speed control)
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                pygame.quit()
-                quit()
-            if event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_ESCAPE:
+        if not self.headless:
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
                     pygame.quit()
                     quit()
-                elif event.key == pygame.K_EQUALS or event.key == pygame.K_PLUS:
-                    self.speed += 20 # Increase speed
-                elif event.key == pygame.K_MINUS:
-                    self.speed = max(10, self.speed - 20) # Decrease speed (minimum 10)
-                elif event.key == pygame.K_0:
-                    self.speed = 0 # 0 means uncapped FPS (max speed)
+                if event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_ESCAPE:
+                        pygame.quit()
+                        quit()
+                    elif event.key == pygame.K_EQUALS or event.key == pygame.K_PLUS:
+                        self.speed += 20 # Increase speed
+                    elif event.key == pygame.K_MINUS:
+                        self.speed = max(10, self.speed - 20) # Decrease speed (minimum 10)
+                    elif event.key == pygame.K_0:
+                        self.speed = 0 # 0 means uncapped FPS (max speed)
 
         # 2. Move
         self._move(action) # Updates self.head
@@ -192,17 +287,18 @@ class SnakeGameAI:
             self.frame_iteration = 0 # RESET COUNTER! Otherwise snake would starve over time.
 
         # 5. Render
-        # At max speed (speed == 0, uncapped FPS training), rendering is the most
-        # expensive part, so we render only every RENDER_EVERY_N_FRAMES frames.
-        # pygame.event.get() is still called every frame (above), so the window
-        # stays responsive and speed-control keys work.
-        self._render_counter += 1
-        if self.speed == 0:
-            if self._render_counter % RENDER_EVERY_N_FRAMES == 0:
+        if not self.headless:
+            # At max speed (speed == 0, uncapped FPS training), rendering is the most
+            # expensive part, so we render only every RENDER_EVERY_N_FRAMES frames.
+            # pygame.event.get() is still called every frame (above), so the window
+            # stays responsive and speed-control keys work.
+            self._render_counter += 1
+            if self.speed == 0:
+                if self._render_counter % RENDER_EVERY_N_FRAMES == 0:
+                    self._update_ui()
+            else:
                 self._update_ui()
-        else:
-            self._update_ui()
-            self.clock.tick(self.speed)
+                self.clock.tick(self.speed)
 
         # 6. Return results
         return game_over, self.score
@@ -252,21 +348,116 @@ class SnakeGameAI:
         return result
 
     def _update_ui(self):
-        self.display.fill(BLACK)
+        if self.headless:
+            return
 
-        # Render snake
-        for pt in self.snake:
-            pygame.draw.rect(self.display, GREEN1, pygame.Rect(pt.x, pt.y, BLOCK_SIZE, BLOCK_SIZE))
-            pygame.draw.rect(self.display, GREEN2, pygame.Rect(pt.x + 4, pt.y + 4, 32, 32))
+        # Blit pre-rendered grid background
+        self.display.blit(self._grid_surface, (0, 0))
 
-        # Render apples
+        # ── Render snake ──
+        snake_len = len(self.snake)
+        for i, pt in enumerate(self.snake):
+            t = i / max(1, snake_len - 1)  # 0 = head, 1 = tail
+
+            # Gradient color from head to tail
+            color = _lerp_color(_SNAKE_BODY_START, _SNAKE_BODY_END, t)
+
+            # Segment size shrinks slightly toward tail for a tapered look
+            shrink = int(t * 4)
+            rect = pygame.Rect(pt.x + shrink, pt.y + shrink,
+                               BLOCK_SIZE - shrink * 2, BLOCK_SIZE - shrink * 2)
+
+            # Rounded rectangle for body segments
+            border_radius = max(4, BLOCK_SIZE // 4 - int(t * 4))
+
+            if i == 0:
+                # HEAD — brighter, with subtle glow
+                head_rect = pygame.Rect(pt.x + 1, pt.y + 1, BLOCK_SIZE - 2, BLOCK_SIZE - 2)
+
+                pygame.draw.rect(self.display, _SNAKE_HEAD_COLOR, head_rect,
+                                 border_radius=BLOCK_SIZE // 3)
+
+                # Eyes
+                self._draw_eyes(pt)
+            else:
+                pygame.draw.rect(self.display, color, rect, border_radius=border_radius)
+
+                # Subtle inner highlight for depth
+                inner_rect = pygame.Rect(rect.x + 2, rect.y + 2,
+                                         rect.width - 4, rect.height - 4)
+                highlight = _lerp_color(color, (255, 255, 255), 0.08)
+                pygame.draw.rect(self.display, highlight, inner_rect,
+                                 border_radius=max(2, border_radius - 2))
+
+        # ── Render food ──
+        pulse = math.sin(self._frame_tick * 0.08) * 0.06 + 0.94  # subtle 0.88-1.0
         for food in self.foods:
-            pygame.draw.rect(self.display, RED, pygame.Rect(food.x, food.y, BLOCK_SIZE, BLOCK_SIZE))
+            # Small food rectangle with rounded corners
+            margin = int(BLOCK_SIZE * 0.2)
+            food_size = BLOCK_SIZE - margin * 2
+            food_rect = pygame.Rect(food.x + margin, food.y + margin,
+                                     food_size, food_size)
+            pygame.draw.rect(self.display, _FOOD_COLOR, food_rect, border_radius=6)
 
-        # Display score and speed
-        text = font.render(f"Score: {self.score} | Speed: {'MAX' if self.speed == 0 else self.speed}", True, WHITE)
-        self.display.blit(text, [0, 0])
+            # Small shine highlight
+            shine_rect = pygame.Rect(food.x + margin + 3, food.y + margin + 3,
+                                      food_size // 3, food_size // 3)
+            pygame.draw.rect(self.display, (255, 130, 150), shine_rect, border_radius=3)
+
+        # ── HUD overlay ──
+        self._draw_hud()
+
         pygame.display.flip()
+
+    def _draw_eyes(self, head_pt):
+        """Draw two eyes on the head, oriented by direction."""
+        cx = head_pt.x + BLOCK_SIZE // 2
+        cy = head_pt.y + BLOCK_SIZE // 2
+        eye_offset = BLOCK_SIZE // 5
+        eye_r = BLOCK_SIZE // 7
+        pupil_r = max(2, eye_r // 2)
+
+        if self.direction == Direction.RIGHT:
+            e1 = (cx + eye_offset, cy - eye_offset)
+            e2 = (cx + eye_offset, cy + eye_offset)
+            p_off = (2, 0)
+        elif self.direction == Direction.LEFT:
+            e1 = (cx - eye_offset, cy - eye_offset)
+            e2 = (cx - eye_offset, cy + eye_offset)
+            p_off = (-2, 0)
+        elif self.direction == Direction.UP:
+            e1 = (cx - eye_offset, cy - eye_offset)
+            e2 = (cx + eye_offset, cy - eye_offset)
+            p_off = (0, -2)
+        else:  # DOWN
+            e1 = (cx - eye_offset, cy + eye_offset)
+            e2 = (cx + eye_offset, cy + eye_offset)
+            p_off = (0, 2)
+
+        for ex, ey in (e1, e2):
+            pygame.draw.circle(self.display, _SNAKE_EYE_WHITE, (ex, ey), eye_r)
+            pygame.draw.circle(self.display, _SNAKE_EYE_PUPIL,
+                               (ex + p_off[0], ey + p_off[1]), pupil_r)
+
+    def _draw_hud(self):
+        """Draw a semi-transparent HUD bar at the top."""
+        hud_height = 36
+        hud_surf = pygame.Surface((self.w, hud_height), pygame.SRCALPHA)
+        hud_surf.fill(_HUD_BG)
+        self.display.blit(hud_surf, (0, 0))
+
+        # Score
+        score_text = self._font_large.render(f"SCORE  {self.score}", True, _HUD_ACCENT)
+        self.display.blit(score_text, (12, 7))
+
+        # Speed
+        speed_str = 'MAX' if self.speed == 0 else str(self.speed)
+        speed_text = self._font_small.render(f"SPEED: {speed_str}", True, _HUD_TEXT_COLOR)
+        self.display.blit(speed_text, (self.w - speed_text.get_width() - 12, 11))
+
+        # Snake length
+        len_text = self._font_small.render(f"LEN: {len(self.snake)}", True, _HUD_TEXT_COLOR)
+        self.display.blit(len_text, (self.w - speed_text.get_width() - len_text.get_width() - 30, 11))
 
     def _move(self, action):
         # [straight, turn right, turn left]
