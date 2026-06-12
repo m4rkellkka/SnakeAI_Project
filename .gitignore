@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+.DS_Store
+
+# Local training checkpoints — not committed, only pretrained.pth
+model/checkpoint_last.pth
+model/checkpoint_best.pth
+
+# Regenerated each training run (committed only in assets/)
+/learning_curve.png
+
+.claude/
+venv/
+.venv/
