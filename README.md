@@ -230,6 +230,42 @@ python src/train_ai.py --watch --pretrained --games 25
 
 - Reduce `MAX_MEMORY` (replay buffer capacity) in `src/train_ai.py`
 
+### Roadmap
+
+Planned next steps, grouped by track. Tracks aren't strictly sequential — some have dependencies, noted inline.
+
+#### Foundation
+
+- **Benchmark harness** — script to run N games across one or more checkpoints and report full score distributions (not just avg/max). Sharper signal for comparing hyperparameters/architectures, and the base for the tournament/leaderboard below.
+
+#### Track A — Model quality (current BC + DAgger pipeline)
+
+- Hyperparameter sweeps: `DAGGER_PROB_MAX` (0.7), `CURRICULUM_PROB`, `LR`, evaluated via the benchmark harness
+- `SnakeNet` architecture experiments — residual blocks, deeper conv stack, alternative FC sizes
+- Longer training runs beyond the current 275-game checkpoint
+
+#### Track B — New training paradigms
+
+- **Reward layer for RL** — additive wrapper deriving a reward signal from `(game_over, score)`, without changing `play_step`'s existing contract (BC stays reward-free by design)
+- **`src/train_rl.py`** — DQN/PPO trained from scratch (no teacher), reusing the 9-channel state representation
+- **Multi-snake environment** — generalize `SnakeGameAI` to N snakes: snake-vs-snake collisions, shared food, opponent-aware state channels
+- **Self-play / AI vs AI** — agents trained against each other on the multi-snake environment
+- **Ensemble / model comparison** — run BC, RL, and self-play checkpoints head-to-head via the benchmark harness
+
+#### Track C — Game modes
+
+- **Human vs AI** — extend `play_manual.py` to the multi-snake environment, one snake human-controlled
+- **Other boards / obstacles** — generalize `GRID_SIZE` and add obstacle cells. The Hamiltonian-cycle teacher doesn't generalize to obstacle maps, so this depends on Track B (an RL-trained agent, or a new BFS/A*-based "imperfect" teacher)
+- **Tournament / leaderboard tab in `launcher.py`** — pick checkpoints/modes, run them through the benchmark harness, show a results table
+
+#### Presentation polish
+
+- Animated GIF of the trained agent playing, at the very top of the README (use the existing `tools/record_demo.py`)
+- Status badges (Python version, license, framework)
+- Table of contents for easier navigation
+- Mermaid diagram of the training pipeline (env → teacher/DAgger → trainer → checkpoint → eval)
+- Optional: browser-playable demo (pygame → wasm via `pygbag`)
+
 ### License
 
 This project is released under the **MIT License** — see [LICENSE](LICENSE) for details.
