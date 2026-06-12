@@ -29,6 +29,17 @@ This project trains a neural network to play Snake by learning from a rule-based
 - **Hamiltonian cycle teacher** with corner-cutting shortcuts (provably collision-free)
 - **Full reproducibility** — includes pretrained checkpoint + training logs
 
+### UI Gallery (Before & After)
+
+**Training Dashboard**
+| Before | After (Premium Dark Theme) |
+|:---:|:---:|
+| <img src="assets/dashboard_old.png" width="400"> | <img src="assets/dashboard_new.png" width="400"> |
+
+**Game Interface**
+| Before | After (Modernized) |
+|:---:|:---:|
+| <img src="assets/game_old.png" width="400"> | <img src="assets/game_new.png" width="400"> |
 ### How It Works
 
 #### State Representation
