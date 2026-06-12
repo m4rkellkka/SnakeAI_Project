@@ -65,7 +65,7 @@ def dagger_prob(total_steps):
 
 
 # --- Plots ---
-def plot(eval_games, eval_avg, eval_max, losses, mean_losses):
+def plot(eval_games, eval_avg, eval_max, losses, mean_losses, output_path='learning_curve.png'):
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(8, 8))
 
     ax1.set_title('Honest Evaluation (no teacher, greedy)')
@@ -86,7 +86,7 @@ def plot(eval_games, eval_avg, eval_max, losses, mean_losses):
     ax2.legend(loc='upper right')
 
     fig.tight_layout()
-    fig.savefig('learning_curve.png')
+    fig.savefig(output_path)
     plt.close(fig)
 
 
@@ -317,6 +317,21 @@ def train(headless=False):
         print(f"Resuming: games={agent.n_games}, steps={agent.total_steps}, "
               f"best honest eval={agent.best_eval_score:.1f}", flush=True)
 
+    # Sweep traceability: captured after CLI overrides have been applied to the module
+    # globals (in __main__, before train() is called). Round-trips through checkpoint
+    # dicts for benchmark.py to display — not a persistent Agent attribute.
+    run_config = {'lr': LR, 'dagger_prob_max': DAGGER_PROB_MAX, 'curriculum_prob': CURRICULUM_PROB}
+    print(f"Config: LR={LR}, DAGGER_PROB_MAX={DAGGER_PROB_MAX}, "
+          f"CURRICULUM_PROB={CURRICULUM_PROB}, MODEL_FOLDER={MODEL_FOLDER}", flush=True)
+
+    # Sweep runs (MODEL_FOLDER != './model') get their own learning_curve.png so
+    # parallel --run-name runs from the same cwd don't clobber the root plot.
+    learning_curve_path = (
+        os.path.join(MODEL_FOLDER, 'learning_curve.png')
+        if MODEL_FOLDER != './model'
+        else 'learning_curve.png'
+    )
+
     game_loss = 0.0
     game_batches = 0
     episode_dagger = False
@@ -379,7 +394,7 @@ def train(headless=False):
 
                 if avg_eval > agent.best_eval_score:
                     agent.best_eval_score = avg_eval
-                    agent.save_checkpoint('checkpoint_best.pth', eval_score=avg_eval)
+                    agent.save_checkpoint('checkpoint_best.pth', eval_score=avg_eval, run_config=run_config)
                     print(f'  >> New best honest eval: {avg_eval:.1f} -> checkpoint_best.pth',
                           flush=True)
 
@@ -393,11 +408,12 @@ def train(headless=False):
                     eval_max_history=agent.eval_max_history,
                     loss_history=agent.loss_history,
                     mean_loss_history=agent.mean_loss_history,
+                    run_config=run_config,
                 )
 
             if agent.n_games % PLOT_EVERY_N_GAMES == 0:
                 plot(agent.eval_games_history, agent.eval_avg_history, agent.eval_max_history,
-                     agent.loss_history, agent.mean_loss_history)
+                     agent.loss_history, agent.mean_loss_history, output_path=learning_curve_path)
 
             episode_dagger = False
             current_is_curriculum = (
@@ -449,7 +465,27 @@ if __name__ == '__main__':
                          help='For --watch: load pretrained model (model/pretrained.pth)')
     parser.add_argument('--headless', action='store_true',
                          help='Train without a game window (for use by launcher dashboard)')
+    parser.add_argument('--lr', type=float, default=None,
+                         help='Override learning rate (default: module LR=0.0005)')
+    parser.add_argument('--dagger-prob-max', type=float, default=None,
+                         help='Override DAgger max probability (default: module DAGGER_PROB_MAX=0.7)')
+    parser.add_argument('--curriculum-prob', type=float, default=None,
+                         help='Override curriculum episode probability (default: module CURRICULUM_PROB=0.2)')
+    parser.add_argument('--run-name', type=str, default=None,
+                         help='If set, checkpoints/plots go to model/<run-name>/ instead of model/')
     args = parser.parse_args()
+
+    # Hyperparameter sweeps: rebind module globals from CLI overrides before Agent()/
+    # train()/watch() are constructed — they're read as bare names at call time, so a
+    # late rebind here is honored.
+    if args.lr is not None:
+        LR = args.lr
+    if args.dagger_prob_max is not None:
+        DAGGER_PROB_MAX = args.dagger_prob_max
+    if args.curriculum_prob is not None:
+        CURRICULUM_PROB = args.curriculum_prob
+    if args.run_name is not None:
+        MODEL_FOLDER = os.path.join('./model', args.run_name)
 
     if args.watch:
         watch(num_games=args.games, pretrained=args.pretrained)

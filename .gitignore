@@ -9,6 +9,13 @@ model/checkpoint_best.pth
 # Regenerated each training run (committed only in assets/)
 /learning_curve.png
 
+# Sweep run checkpoints/plots (model/<run-name>/...)
+model/*/checkpoint_*.pth
+model/*/learning_curve.png
+
+# Benchmark dashboard temp plots
+/temp_benchmark_*.png
+
 .claude/
 venv/
 .venv/

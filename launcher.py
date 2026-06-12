@@ -5,6 +5,7 @@ import os
 import sys
 import threading
 import time
+import glob
 from PIL import Image, ImageTk
 DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -535,6 +536,735 @@ class TrainingDashboard(tk.Toplevel):
 
 
 # ──────────────────────────────────────────────────
+# Sweep Run Dashboard (Toplevel window)
+# ──────────────────────────────────────────────────
+class SweepRunDashboard(tk.Toplevel):
+    def __init__(self, master):
+        super().__init__(master)
+        self.title("Snake AI — New Sweep Run")
+        self.configure(bg=BG_DARK)
+        self.resizable(True, True)
+        self.geometry("1100x1020")
+        self.minsize(850, 750)
+
+        self._process = None
+        self._running = False
+        self._log_lines = []
+        self._log_line_count = 0
+        self._start_time = None
+        self._elapsed_id = None
+        self._pulse_id = None
+        self._pulse_on = True
+        self._progress_id = None
+        self._progress_pos = 0
+
+        self._build_ui()
+
+    def _build_ui(self):
+        # ── Header bar ──
+        header = tk.Frame(self, bg="#101014")
+        header.pack(fill=tk.X)
+
+        header_inner = tk.Frame(header, bg="#101014")
+        header_inner.pack(fill=tk.X, padx=24, pady=(14, 10))
+
+        left_hdr = tk.Frame(header_inner, bg="#101014")
+        left_hdr.pack(side=tk.LEFT)
+
+        tk.Label(left_hdr, text="⚡", font=("", 20), bg="#101014", fg=ACCENT_CYAN).pack(side=tk.LEFT, padx=(0, 10))
+
+        title_block = tk.Frame(left_hdr, bg="#101014")
+        title_block.pack(side=tk.LEFT)
+        tk.Label(title_block, text="SWEEP RUN DASHBOARD", font=("Helvetica Neue", 15, "bold"), bg="#101014", fg=TEXT_PRIMARY).pack(anchor=tk.W)
+        tk.Label(title_block, text="Run custom configurations", font=("Helvetica Neue", 10), bg="#101014", fg=TEXT_MUTED).pack(anchor=tk.W)
+
+        right_hdr = tk.Frame(header_inner, bg="#101014")
+        right_hdr.pack(side=tk.RIGHT)
+
+        self._elapsed_label = tk.Label(right_hdr, text="", font=("SF Mono", 11), bg="#101014", fg=TEXT_MUTED)
+        self._elapsed_label.pack(side=tk.RIGHT, padx=(12, 0))
+
+        self._status_dot = tk.Canvas(right_hdr, width=12, height=12, bg="#101014", highlightthickness=0)
+        self._status_dot.pack(side=tk.RIGHT, padx=(0, 6))
+        self._status_dot.create_oval(2, 2, 10, 10, fill=TEXT_MUTED, outline="", tags="dot")
+
+        self._status_label = tk.Label(right_hdr, text="Ready", font=("Helvetica Neue", 11), bg="#101014", fg=TEXT_SECONDARY)
+        self._status_label.pack(side=tk.RIGHT)
+
+        # ── Animated progress bar ──
+        self._progress_canvas = tk.Canvas(self, height=2, bg=BG_DARK, highlightthickness=0)
+        self._progress_canvas.pack(fill=tk.X)
+
+        # ── Inputs ──
+        inputs_outer = tk.Frame(self, bg=BG_DARK)
+        inputs_outer.pack(fill=tk.X, padx=24, pady=(12, 4))
+
+        inputs_outer.columnconfigure(0, weight=1)
+        inputs_outer.columnconfigure(1, weight=1)
+
+        self.entry_lr = self._make_input(inputs_outer, "Learning Rate (default 0.0005):", 0, 0)
+        self.entry_dagger = self._make_input(inputs_outer, "DAgger Prob Max (default 0.7):", 0, 1)
+        self.entry_curr = self._make_input(inputs_outer, "Curriculum Prob (default 0.2):", 1, 0)
+        self.entry_name = self._make_input(inputs_outer, "Run Name (optional):", 1, 1)
+
+        self._config_label = tk.Label(self, text="Config: —", font=("SF Mono", 10), bg=BG_DARK, fg=ACCENT_CYAN)
+        self._config_label.pack(fill=tk.X, padx=24, pady=(4, 8), anchor=tk.W)
+
+        # ── Bottom action bar ──
+        bottom = tk.Frame(self, bg=BG_DARK)
+        bottom.pack(side=tk.BOTTOM, fill=tk.X, padx=24, pady=(10, 18))
+
+        self._action_btn = tk.Label(
+            bottom, text="▶  START SWEEP",
+            font=("Helvetica Neue", 13, "bold"),
+            bg=ACCENT_GREEN, fg="#000000", cursor="hand2",
+            padx=24, pady=12
+        )
+        self._action_btn.pack(fill=tk.X)
+        self._action_btn.bind("<Button-1>", lambda e: self._on_action_click())
+        self._action_btn.bind("<Enter>", lambda e: self._action_btn.configure(
+            bg=ACCENT_GREEN_DIM if not self._running else "#ff2244"))
+        self._action_btn.bind("<Leave>", lambda e: self._action_btn.configure(
+            bg=ACCENT_GREEN if not self._running else ACCENT_RED))
+
+        # ── Log area ──
+        log_section = tk.Frame(self, bg=BG_DARK, height=180)
+        log_section.pack(side=tk.BOTTOM, fill=tk.X, padx=24, pady=(8, 4))
+        log_section.pack_propagate(False)
+
+        log_header = tk.Frame(log_section, bg=BG_DARK)
+        log_header.pack(fill=tk.X, pady=(0, 4))
+
+        tk.Label(log_header, text="📋  TRAINING LOG", font=("Helvetica Neue", 10, "bold"), bg=BG_DARK, fg=TEXT_MUTED).pack(side=tk.LEFT)
+
+        self._log_count_label = tk.Label(log_header, text="0 lines", font=("Helvetica Neue", 9), bg=BG_DARK, fg=TEXT_MUTED)
+        self._log_count_label.pack(side=tk.RIGHT)
+
+        self._clear_log_btn = tk.Label(log_header, text="✕ Clear", font=("Helvetica Neue", 9), bg=BG_DARK, fg=TEXT_MUTED, cursor="hand2")
+        self._clear_log_btn.pack(side=tk.RIGHT, padx=(0, 10))
+        self._clear_log_btn.bind("<Button-1>", lambda e: self._clear_log())
+        self._clear_log_btn.bind("<Enter>", lambda e: self._clear_log_btn.configure(fg=ACCENT_RED))
+        self._clear_log_btn.bind("<Leave>", lambda e: self._clear_log_btn.configure(fg=TEXT_MUTED))
+
+        log_container = tk.Frame(log_section, bg=LOG_BG, highlightbackground=BORDER_COLOR, highlightthickness=1)
+        log_container.pack(fill=tk.BOTH, expand=True)
+
+        self._log_scrollbar = tk.Scrollbar(log_container, orient=tk.VERTICAL, troughcolor=LOG_BG, bg="#222228")
+        self._log_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        self._log_text = tk.Text(log_container, bg=LOG_BG, fg=LOG_FG, font=("SF Mono", 11),
+                                  insertbackground=ACCENT_GREEN, selectbackground="#334455",
+                                  relief=tk.FLAT, padx=12, pady=8, wrap=tk.WORD,
+                                  yscrollcommand=self._log_scrollbar.set, state=tk.DISABLED)
+        self._log_text.pack(fill=tk.BOTH, expand=True)
+        self._log_scrollbar.config(command=self._log_text.yview)
+
+        # Log tag colors
+        self._log_text.tag_configure("eval", foreground=ACCENT_CYAN)
+        self._log_text.tag_configure("best", foreground=ACCENT_GREEN, font=("SF Mono", 11, "bold"))
+        self._log_text.tag_configure("game", foreground=LOG_FG)
+        self._log_text.tag_configure("info", foreground=TEXT_SECONDARY)
+        self._log_text.tag_configure("dagger", foreground=ACCENT_PURPLE)
+        self._log_text.tag_configure("curriculum", foreground=ACCENT_ORANGE)
+        self._log_text.tag_configure("save", foreground=ACCENT_BLUE)
+
+        # ── Chart area ──
+        chart_section = tk.Frame(self, bg=BG_DARK)
+        chart_section.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=24, pady=(8, 4))
+        
+        chart_header = tk.Frame(chart_section, bg=BG_DARK)
+        chart_header.pack(fill=tk.X, pady=(0, 4))
+
+        tk.Label(chart_header, text="📊  LEARNING CURVE", font=("Helvetica Neue", 10, "bold"), bg=BG_DARK, fg=TEXT_MUTED).pack(side=tk.LEFT)
+
+        self._chart_time_label = tk.Label(chart_header, text="", font=("Helvetica Neue", 9), bg=BG_DARK, fg=TEXT_MUTED)
+        self._chart_time_label.pack(side=tk.RIGHT)
+
+        self._chart_refresh_btn = tk.Label(chart_header, text="⟳ Refresh", font=("Helvetica Neue", 9), bg=BG_DARK, fg=ACCENT_CYAN, cursor="hand2")
+        self._chart_refresh_btn.pack(side=tk.RIGHT, padx=(0, 10))
+        self._chart_refresh_btn.bind("<Button-1>", lambda e: self._refresh_chart())
+        self._chart_refresh_btn.bind("<Enter>", lambda e: self._chart_refresh_btn.configure(fg=ACCENT_GREEN))
+        self._chart_refresh_btn.bind("<Leave>", lambda e: self._chart_refresh_btn.configure(fg=ACCENT_CYAN))
+
+        self._chart_container = tk.Frame(chart_section, bg=BG_CARD, highlightbackground=BORDER_COLOR, highlightthickness=1)
+        self._chart_container.pack(fill=tk.BOTH, expand=True)
+
+        self._chart_label = tk.Label(self._chart_container, text="No data yet — start sweep to see the learning curve",
+                                      font=("Helvetica Neue", 11), bg=BG_CARD, fg=TEXT_MUTED)
+        self._chart_label.pack(fill=tk.BOTH, expand=True)
+        self._chart_image = None
+
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
+
+    def _make_input(self, parent, label_text, row, col):
+        frame = tk.Frame(parent, bg=BG_DARK)
+        frame.grid(row=row, column=col, sticky="ew", padx=10, pady=5)
+        tk.Label(frame, text=label_text, bg=BG_DARK, fg=TEXT_MUTED, font=("Helvetica Neue", 10)).pack(anchor=tk.W)
+        entry = tk.Entry(frame, bg=BG_CARD, fg=TEXT_PRIMARY, insertbackground=ACCENT_GREEN,
+                         font=("SF Mono", 11), relief=tk.FLAT, highlightbackground=BORDER_COLOR, highlightthickness=1)
+        entry.pack(fill=tk.X, pady=(2, 0), ipady=4)
+        return entry
+
+    def _start_pulse(self):
+        if not self._running: return
+        self._pulse_on = not self._pulse_on
+        color = ACCENT_GREEN if self._pulse_on else "#005530"
+        self._status_dot.itemconfig("dot", fill=color)
+        self._pulse_id = self.after(600, self._start_pulse)
+
+    def _stop_pulse(self, color=TEXT_MUTED):
+        if self._pulse_id:
+            self.after_cancel(self._pulse_id)
+            self._pulse_id = None
+        self._status_dot.itemconfig("dot", fill=color)
+
+    def _start_progress_anim(self):
+        if not self._running: return
+        self._progress_canvas.delete("bar")
+        w = self._progress_canvas.winfo_width()
+        if w < 10: w = 1100
+        bar_len = w // 4
+        x = self._progress_pos % (w + bar_len) - bar_len
+        self._progress_canvas.create_rectangle(x, 0, x + bar_len, 2, fill=ACCENT_CYAN, outline="", tags="bar")
+        self._progress_pos += 4
+        self._progress_id = self.after(30, self._start_progress_anim)
+
+    def _stop_progress_anim(self):
+        if self._progress_id:
+            self.after_cancel(self._progress_id)
+            self._progress_id = None
+        try:
+            if self._progress_canvas.winfo_exists():
+                self._progress_canvas.delete("bar")
+        except tk.TclError:
+            pass
+
+    def _update_elapsed(self):
+        if not self._running or not self._start_time: return
+        elapsed = int(time.time() - self._start_time)
+        hrs, rem = divmod(elapsed, 3600)
+        mins, secs = divmod(rem, 60)
+        txt = f"⏱ {hrs}h {mins:02d}m {secs:02d}s" if hrs > 0 else f"⏱ {mins}m {secs:02d}s"
+        self._elapsed_label.configure(text=txt)
+        self._elapsed_id = self.after(1000, self._update_elapsed)
+
+    def _stop_elapsed(self):
+        if self._elapsed_id:
+            self.after_cancel(self._elapsed_id)
+            self._elapsed_id = None
+
+    def _on_action_click(self):
+        if not self._running:
+            self._start_training()
+        else:
+            self._stop_training()
+
+    def _start_training(self):
+        self._running = True
+        self._start_time = time.time()
+        self._status_label.configure(text="Running Sweep", fg=ACCENT_GREEN)
+        self._action_btn.configure(text="■  STOP SWEEP", bg=ACCENT_RED, fg="white")
+
+        self._start_pulse()
+        self._start_progress_anim()
+        self._update_elapsed()
+
+        cmd = [sys.executable, "-u", TRAIN_AI, "--headless"]
+        
+        lr = self.entry_lr.get().strip()
+        if lr: cmd.extend(["--lr", lr])
+        
+        dagger = self.entry_dagger.get().strip()
+        if dagger: cmd.extend(["--dagger-prob-max", dagger])
+        
+        curr = self.entry_curr.get().strip()
+        if curr: cmd.extend(["--curriculum-prob", curr])
+        
+        rname = self.entry_name.get().strip()
+        if rname: cmd.extend(["--run-name", rname])
+
+        self._process = subprocess.Popen(
+            cmd, cwd=DIR, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1
+        )
+        self._reader_thread = threading.Thread(target=self._read_output, daemon=True)
+        self._reader_thread.start()
+        self._schedule_chart_refresh()
+
+    def _read_output(self):
+        try:
+            for line in self._process.stdout:
+                line = line.rstrip('\n')
+                if line:
+                    self.after(0, self._append_log, line)
+                    self.after(0, self._parse_stats, line)
+        except Exception:
+            pass
+        finally:
+            self.after(0, self._on_process_ended)
+
+    def _append_log(self, line):
+        self._log_text.configure(state=tk.NORMAL)
+        tag = "game"
+        if "Honest eval" in line or ">> " in line: tag = "eval"
+        if "New best" in line: tag = "best"
+        elif "checkpoint" in line.lower() or "Saving" in line: tag = "save"
+        if "Training started" in line or "Resuming" in line: tag = "info"
+        if "[D]" in line or "[C,D]" in line: tag = "dagger"
+        if "[C]" in line or "[C," in line: tag = "curriculum"
+
+        self._log_text.insert(tk.END, line + "\n", tag)
+        self._log_text.see(tk.END)
+        self._log_text.configure(state=tk.DISABLED)
+
+        self._log_line_count += 1
+        self._log_count_label.configure(text=f"{self._log_line_count} lines")
+
+    def _clear_log(self):
+        self._log_text.configure(state=tk.NORMAL)
+        self._log_text.delete("1.0", tk.END)
+        self._log_text.configure(state=tk.DISABLED)
+        self._log_line_count = 0
+        self._log_count_label.configure(text="0 lines")
+
+    def _parse_stats(self, line):
+        if line.startswith("Config:"):
+            self._config_label.configure(text=line)
+
+    def _schedule_chart_refresh(self):
+        if not self._running: return
+        self._refresh_chart()
+        self.after(15000, self._schedule_chart_refresh)
+
+    def _refresh_chart(self):
+        rname = self.entry_name.get().strip()
+        if rname:
+            plot_path = os.path.join(DIR, "model", rname, "learning_curve.png")
+        else:
+            plot_path = os.path.join(DIR, "learning_curve.png")
+            
+        if not os.path.exists(plot_path): return
+        try:
+            pil_img = Image.open(plot_path)
+            container_w = max(600, self._chart_container.winfo_width() - 8)
+            container_h = max(300, self._chart_container.winfo_height() - 8)
+            img_ratio = pil_img.width / pil_img.height
+            container_ratio = container_w / container_h
+            if img_ratio > container_ratio:
+                new_w = container_w
+                new_h = int(container_w / img_ratio)
+            else:
+                new_h = container_h
+                new_w = int(container_h * img_ratio)
+            pil_img = pil_img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+            img = ImageTk.PhotoImage(pil_img)
+            self._chart_image = img
+            self._chart_label.configure(image=img, text="")
+            mod_time = os.path.getmtime(plot_path)
+            t = time.strftime("%H:%M:%S", time.localtime(mod_time))
+            self._chart_time_label.configure(text=f"Last update: {t}")
+        except Exception:
+            pass
+
+    def _stop_training(self):
+        if self._process and self._process.poll() is None:
+            self._process.terminate()
+            self._running = False
+            self._status_label.configure(text="Stopped", fg=ACCENT_RED)
+            self._action_btn.configure(text="▶  START SWEEP", bg=ACCENT_GREEN, fg="#000000")
+            self._stop_pulse(ACCENT_RED)
+            self._stop_progress_anim()
+            self._stop_elapsed()
+
+    def _on_process_ended(self):
+        self._running = False
+        self._stop_progress_anim()
+        self._stop_elapsed()
+        try:
+            if self.winfo_exists() and self._status_label.winfo_exists():
+                if self._status_label.cget("text") != "Stopped":
+                    self._status_label.configure(text="Finished", fg=ACCENT_ORANGE)
+                    self._stop_pulse(ACCENT_ORANGE)
+        except tk.TclError:
+            pass
+
+    def _on_close(self):
+        if self._process and self._process.poll() is None:
+            self._process.terminate()
+        self._running = False
+        self._stop_pulse()
+        self._stop_progress_anim()
+        self._stop_elapsed()
+        self.destroy()
+
+# ──────────────────────────────────────────────────
+# Benchmark Dashboard (Toplevel window)
+# ──────────────────────────────────────────────────
+class BenchmarkDashboard(tk.Toplevel):
+    def __init__(self, master):
+        super().__init__(master)
+        self.title("Snake AI — Benchmark Models")
+        self.configure(bg=BG_DARK)
+        self.resizable(True, True)
+        self.geometry("1100x1020")
+        self.minsize(850, 750)
+
+        self._process = None
+        self._running = False
+        self._log_lines = []
+        self._log_line_count = 0
+        self._start_time = None
+        self._elapsed_id = None
+        self._pulse_id = None
+        self._pulse_on = True
+        self._progress_id = None
+        self._progress_pos = 0
+        self._temp_plot_path = None
+        self._available_cps = []
+
+        self._build_ui()
+
+    def _find_checkpoints(self):
+        model_dir = os.path.join(DIR, "model")
+        if not os.path.exists(model_dir):
+            return []
+        cps = []
+        for root_d, dirs, files in os.walk(model_dir):
+            for f in files:
+                if f in ("checkpoint_best.pth", "checkpoint_last.pth"):
+                    path = os.path.join(root_d, f)
+                    rel = os.path.relpath(path, model_dir)
+                    cps.append(rel)
+        return sorted(cps)
+
+    def _build_ui(self):
+        # ── Header bar ──
+        header = tk.Frame(self, bg="#101014")
+        header.pack(fill=tk.X)
+
+        header_inner = tk.Frame(header, bg="#101014")
+        header_inner.pack(fill=tk.X, padx=24, pady=(14, 10))
+
+        left_hdr = tk.Frame(header_inner, bg="#101014")
+        left_hdr.pack(side=tk.LEFT)
+
+        tk.Label(left_hdr, text="📊", font=("", 20), bg="#101014", fg=ACCENT_ORANGE).pack(side=tk.LEFT, padx=(0, 10))
+
+        title_block = tk.Frame(left_hdr, bg="#101014")
+        title_block.pack(side=tk.LEFT)
+        tk.Label(title_block, text="BENCHMARK MODELS", font=("Helvetica Neue", 15, "bold"), bg="#101014", fg=TEXT_PRIMARY).pack(anchor=tk.W)
+        tk.Label(title_block, text="Evaluate and compare checkpoints", font=("Helvetica Neue", 10), bg="#101014", fg=TEXT_MUTED).pack(anchor=tk.W)
+
+        right_hdr = tk.Frame(header_inner, bg="#101014")
+        right_hdr.pack(side=tk.RIGHT)
+
+        self._elapsed_label = tk.Label(right_hdr, text="", font=("SF Mono", 11), bg="#101014", fg=TEXT_MUTED)
+        self._elapsed_label.pack(side=tk.RIGHT, padx=(12, 0))
+
+        self._status_dot = tk.Canvas(right_hdr, width=12, height=12, bg="#101014", highlightthickness=0)
+        self._status_dot.pack(side=tk.RIGHT, padx=(0, 6))
+        self._status_dot.create_oval(2, 2, 10, 10, fill=TEXT_MUTED, outline="", tags="dot")
+
+        self._status_label = tk.Label(right_hdr, text="Ready", font=("Helvetica Neue", 11), bg="#101014", fg=TEXT_SECONDARY)
+        self._status_label.pack(side=tk.RIGHT)
+
+        # ── Animated progress bar ──
+        self._progress_canvas = tk.Canvas(self, height=2, bg=BG_DARK, highlightthickness=0)
+        self._progress_canvas.pack(fill=tk.X)
+
+        # ── Inputs ──
+        inputs_outer = tk.Frame(self, bg=BG_DARK)
+        inputs_outer.pack(fill=tk.X, padx=24, pady=(12, 4))
+
+        # Checkpoints selection
+        cp_frame = tk.Frame(inputs_outer, bg=BG_CARD, highlightbackground=BORDER_COLOR, highlightthickness=1)
+        cp_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 10))
+        
+        tk.Label(cp_frame, text="Select Checkpoints (Checkboxes):", bg=BG_CARD, fg=TEXT_MUTED).pack(anchor=tk.W, padx=10, pady=(10, 5))
+        
+        list_frame = tk.Frame(cp_frame, bg=BG_CARD)
+        list_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
+        
+        # Use a canvas for actual checkboxes to fulfill "как чекбоксы" request exactly
+        self.canvas_cb = tk.Canvas(list_frame, bg=BG_CARD, highlightthickness=0)
+        scroll_cb = tk.Scrollbar(list_frame, orient=tk.VERTICAL, command=self.canvas_cb.yview, bg=BG_DARK)
+        self.inner_cb_frame = tk.Frame(self.canvas_cb, bg=BG_CARD)
+        
+        self.inner_cb_frame.bind("<Configure>", lambda e: self.canvas_cb.configure(scrollregion=self.canvas_cb.bbox("all")))
+        self.canvas_cb.create_window((0, 0), window=self.inner_cb_frame, anchor="nw")
+        
+        self.canvas_cb.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scroll_cb.pack(side=tk.RIGHT, fill=tk.Y)
+        self.canvas_cb.configure(yscrollcommand=scroll_cb.set)
+
+        self._available_cps = self._find_checkpoints()
+        self._cp_vars = {}
+        for cp in self._available_cps:
+            var = tk.BooleanVar(value=False)
+            self._cp_vars[cp] = var
+            disp = f"(root) {cp}" if "/" not in cp and "\\" not in cp else cp
+            cb = tk.Checkbutton(self.inner_cb_frame, text=disp, variable=var,
+                                bg=BG_CARD, fg=TEXT_PRIMARY, selectcolor=BG_DARK,
+                                activebackground=BG_CARD, activeforeground=ACCENT_GREEN,
+                                font=("SF Mono", 11))
+            cb.pack(anchor=tk.W, pady=2)
+
+        # Right side params
+        params_frame = tk.Frame(inputs_outer, bg=BG_DARK)
+        params_frame.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        self.entry_games = self._make_input(params_frame, "Games (default 100):")
+        self.entry_seed = self._make_input(params_frame, "Seed (optional):")
+
+        # ── Bottom action bar ──
+        bottom = tk.Frame(self, bg=BG_DARK)
+        bottom.pack(side=tk.BOTTOM, fill=tk.X, padx=24, pady=(10, 18))
+
+        self._action_btn = tk.Label(
+            bottom, text="▶  RUN BENCHMARK",
+            font=("Helvetica Neue", 13, "bold"),
+            bg=ACCENT_ORANGE, fg="#000000", cursor="hand2",
+            padx=24, pady=12
+        )
+        self._action_btn.pack(fill=tk.X)
+        self._action_btn.bind("<Button-1>", lambda e: self._on_action_click())
+        self._action_btn.bind("<Enter>", lambda e: self._action_btn.configure(
+            bg="#ffaa66" if not self._running else "#ff2244"))
+        self._action_btn.bind("<Leave>", lambda e: self._action_btn.configure(
+            bg=ACCENT_ORANGE if not self._running else ACCENT_RED))
+
+        # ── Log area ──
+        log_section = tk.Frame(self, bg=BG_DARK, height=180)
+        log_section.pack(side=tk.BOTTOM, fill=tk.X, padx=24, pady=(8, 4))
+        log_section.pack_propagate(False)
+
+        log_header = tk.Frame(log_section, bg=BG_DARK)
+        log_header.pack(fill=tk.X, pady=(0, 4))
+
+        tk.Label(log_header, text="📋  BENCHMARK LOG", font=("Helvetica Neue", 10, "bold"), bg=BG_DARK, fg=TEXT_MUTED).pack(side=tk.LEFT)
+
+        self._log_count_label = tk.Label(log_header, text="0 lines", font=("Helvetica Neue", 9), bg=BG_DARK, fg=TEXT_MUTED)
+        self._log_count_label.pack(side=tk.RIGHT)
+
+        log_container = tk.Frame(log_section, bg=LOG_BG, highlightbackground=BORDER_COLOR, highlightthickness=1)
+        log_container.pack(fill=tk.BOTH, expand=True)
+
+        self._log_scrollbar = tk.Scrollbar(log_container, orient=tk.VERTICAL, troughcolor=LOG_BG, bg="#222228")
+        self._log_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        self._log_text = tk.Text(log_container, bg=LOG_BG, fg=LOG_FG, font=("SF Mono", 11),
+                                  insertbackground=ACCENT_GREEN, selectbackground="#334455",
+                                  relief=tk.FLAT, padx=12, pady=8, wrap=tk.WORD,
+                                  yscrollcommand=self._log_scrollbar.set, state=tk.DISABLED)
+        self._log_text.pack(fill=tk.BOTH, expand=True)
+        self._log_scrollbar.config(command=self._log_text.yview)
+
+        self._log_text.tag_configure("eval", foreground=ACCENT_CYAN)
+        self._log_text.tag_configure("best", foreground=ACCENT_GREEN, font=("SF Mono", 11, "bold"))
+        self._log_text.tag_configure("game", foreground=LOG_FG)
+        self._log_text.tag_configure("info", foreground=TEXT_SECONDARY)
+
+        # ── Chart area ──
+        chart_section = tk.Frame(self, bg=BG_DARK)
+        chart_section.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=24, pady=(8, 4))
+        
+        chart_header = tk.Frame(chart_section, bg=BG_DARK)
+        chart_header.pack(fill=tk.X, pady=(0, 4))
+
+        tk.Label(chart_header, text="📊  BENCHMARK RESULTS", font=("Helvetica Neue", 10, "bold"), bg=BG_DARK, fg=TEXT_MUTED).pack(side=tk.LEFT)
+
+        self._chart_container = tk.Frame(chart_section, bg=BG_CARD, highlightbackground=BORDER_COLOR, highlightthickness=1)
+        self._chart_container.pack(fill=tk.BOTH, expand=True)
+
+        self._chart_label = tk.Label(self._chart_container, text="Select checkpoints and run benchmark to see plot",
+                                      font=("Helvetica Neue", 11), bg=BG_CARD, fg=TEXT_MUTED)
+        self._chart_label.pack(fill=tk.BOTH, expand=True)
+        self._chart_image = None
+
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
+
+    def _make_input(self, parent, label_text):
+        frame = tk.Frame(parent, bg=BG_DARK)
+        frame.pack(fill=tk.X, padx=10, pady=(10, 5))
+        tk.Label(frame, text=label_text, bg=BG_DARK, fg=TEXT_MUTED, font=("Helvetica Neue", 10)).pack(anchor=tk.W)
+        entry = tk.Entry(frame, bg=BG_CARD, fg=TEXT_PRIMARY, insertbackground=ACCENT_GREEN,
+                         font=("SF Mono", 11), relief=tk.FLAT, highlightbackground=BORDER_COLOR, highlightthickness=1)
+        entry.pack(fill=tk.X, pady=(2, 0), ipady=4)
+        return entry
+
+    def _start_pulse(self):
+        if not self._running: return
+        self._pulse_on = not self._pulse_on
+        color = ACCENT_ORANGE if self._pulse_on else "#884400"
+        self._status_dot.itemconfig("dot", fill=color)
+        self._pulse_id = self.after(600, self._start_pulse)
+
+    def _stop_pulse(self, color=TEXT_MUTED):
+        if self._pulse_id:
+            self.after_cancel(self._pulse_id)
+            self._pulse_id = None
+        self._status_dot.itemconfig("dot", fill=color)
+
+    def _start_progress_anim(self):
+        if not self._running: return
+        self._progress_canvas.delete("bar")
+        w = self._progress_canvas.winfo_width()
+        if w < 10: w = 1100
+        bar_len = w // 4
+        x = self._progress_pos % (w + bar_len) - bar_len
+        self._progress_canvas.create_rectangle(x, 0, x + bar_len, 2, fill=ACCENT_ORANGE, outline="", tags="bar")
+        self._progress_pos += 4
+        self._progress_id = self.after(30, self._start_progress_anim)
+
+    def _stop_progress_anim(self):
+        if self._progress_id:
+            self.after_cancel(self._progress_id)
+            self._progress_id = None
+        try:
+            if self._progress_canvas.winfo_exists():
+                self._progress_canvas.delete("bar")
+        except tk.TclError:
+            pass
+
+    def _update_elapsed(self):
+        if not self._running or not self._start_time: return
+        elapsed = int(time.time() - self._start_time)
+        hrs, rem = divmod(elapsed, 3600)
+        mins, secs = divmod(rem, 60)
+        txt = f"⏱ {hrs}h {mins:02d}m {secs:02d}s" if hrs > 0 else f"⏱ {mins}m {secs:02d}s"
+        self._elapsed_label.configure(text=txt)
+        self._elapsed_id = self.after(1000, self._update_elapsed)
+
+    def _stop_elapsed(self):
+        if self._elapsed_id:
+            self.after_cancel(self._elapsed_id)
+            self._elapsed_id = None
+
+    def _on_action_click(self):
+        if not self._running:
+            self._start_benchmark()
+        else:
+            self._stop_benchmark()
+
+    def _start_benchmark(self):
+        selected = [cp for cp, var in self._cp_vars.items() if var.get()]
+        if not selected:
+            messagebox.showerror("Error", "No checkpoints selected!")
+            return
+
+        self._running = True
+        self._start_time = time.time()
+        self._status_label.configure(text="Benchmarking", fg=ACCENT_ORANGE)
+        self._action_btn.configure(text="■  STOP BENCHMARK", bg=ACCENT_RED, fg="white")
+
+        self._start_pulse()
+        self._start_progress_anim()
+        self._update_elapsed()
+
+        # clear log
+        self._log_text.configure(state=tk.NORMAL)
+        self._log_text.delete("1.0", tk.END)
+        self._log_text.configure(state=tk.DISABLED)
+        self._log_line_count = 0
+
+        cmd = [sys.executable, "-u", os.path.join("tools", "benchmark.py")]
+        
+        for cp in selected:
+            cmd.extend(["--checkpoint", cp])
+
+        games = self.entry_games.get().strip()
+        if not games: games = "100"
+        cmd.extend(["--games", games])
+        
+        seed = self.entry_seed.get().strip()
+        if seed: cmd.extend(["--seed", seed])
+
+        self._temp_plot_path = os.path.join(DIR, f"temp_benchmark_{int(time.time())}.png")
+        cmd.extend(["--plot", self._temp_plot_path])
+
+        self._process = subprocess.Popen(
+            cmd, cwd=DIR, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1
+        )
+        self._reader_thread = threading.Thread(target=self._read_output, daemon=True)
+        self._reader_thread.start()
+
+    def _read_output(self):
+        try:
+            for line in self._process.stdout:
+                line = line.rstrip('\n')
+                if line:
+                    self.after(0, self._append_log, line)
+        except Exception:
+            pass
+        finally:
+            self.after(0, self._on_process_ended)
+
+    def _append_log(self, line):
+        self._log_text.configure(state=tk.NORMAL)
+        tag = "game"
+        if "Running" in line: tag = "eval"
+        if "mean=" in line: tag = "best"
+
+        self._log_text.insert(tk.END, line + "\n", tag)
+        self._log_text.see(tk.END)
+        self._log_text.configure(state=tk.DISABLED)
+
+        self._log_line_count += 1
+        self._log_count_label.configure(text=f"{self._log_line_count} lines")
+
+    def _refresh_chart(self):
+        if not self._temp_plot_path or not os.path.exists(self._temp_plot_path): return
+        try:
+            pil_img = Image.open(self._temp_plot_path)
+            container_w = max(600, self._chart_container.winfo_width() - 8)
+            container_h = max(300, self._chart_container.winfo_height() - 8)
+            img_ratio = pil_img.width / pil_img.height
+            container_ratio = container_w / container_h
+            if img_ratio > container_ratio:
+                new_w = container_w
+                new_h = int(container_w / img_ratio)
+            else:
+                new_h = container_h
+                new_w = int(container_h * img_ratio)
+            pil_img = pil_img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+            img = ImageTk.PhotoImage(pil_img)
+            self._chart_image = img
+            self._chart_label.configure(image=img, text="")
+        except Exception:
+            pass
+
+    def _stop_benchmark(self):
+        if self._process and self._process.poll() is None:
+            self._process.terminate()
+            self._running = False
+            self._status_label.configure(text="Stopped", fg=ACCENT_RED)
+            self._action_btn.configure(text="▶  RUN BENCHMARK", bg=ACCENT_ORANGE, fg="#000000")
+            self._stop_pulse(ACCENT_RED)
+            self._stop_progress_anim()
+            self._stop_elapsed()
+
+    def _on_process_ended(self):
+        self._running = False
+        self._stop_progress_anim()
+        self._stop_elapsed()
+        try:
+            if self.winfo_exists() and self._status_label.winfo_exists():
+                if self._status_label.cget("text") != "Stopped":
+                    self._status_label.configure(text="Finished", fg=ACCENT_ORANGE)
+                    self._stop_pulse(ACCENT_ORANGE)
+                    self.after(500, self._refresh_chart)
+        except tk.TclError:
+            pass
+
+    def _on_close(self):
+        if self._process and self._process.poll() is None:
+            self._process.terminate()
+        self._running = False
+        self._stop_pulse()
+        self._stop_progress_anim()
+        self._stop_elapsed()
+        self.destroy()
+
+# ──────────────────────────────────────────────────
 # Launcher actions
 # ──────────────────────────────────────────────────
 def run_training(root):
@@ -781,6 +1511,11 @@ def main():
     PremiumButton(container, "Start / Continue Training",
                   lambda: run_training(root),
                   icon="▶", accent=True, show_chevron=False
+                  ).pack(fill=tk.X, pady=(0, 6))
+
+    PremiumButton(container, "New Sweep Run",
+                  lambda: SweepRunDashboard(root),
+                  icon="⚡", accent=False, show_chevron=False
                   ).pack(fill=tk.X, pady=(0, 12))
 
     # ── WATCH section ──
@@ -810,6 +1545,15 @@ def main():
     # Hint text for manual play
     tk.Label(container, text="WASD / Arrows", font=("Helvetica Neue", 9),
              bg=BG_DARK, fg=TEXT_MUTED).pack(anchor=tk.E, pady=(0, 4))
+
+    # ── BENCHMARK section ──
+    tk.Label(container, text="BENCHMARK", font=("Helvetica Neue", 10, "bold"),
+             bg=BG_DARK, fg=TEXT_MUTED).pack(anchor=tk.W, pady=(4, 6))
+
+    PremiumButton(container, "Benchmark Models",
+                  lambda: BenchmarkDashboard(root),
+                  icon="📊", accent=False, show_chevron=False, dot_color=ACCENT_ORANGE
+                  ).pack(fill=tk.X, pady=(0, 12))
 
     # ── OTHER section ──
     tk.Label(container, text="OTHER", font=("Helvetica Neue", 10, "bold"),
