@@ -41,7 +41,7 @@ def record_demo(pretrained=True, max_frames=400, output_path='demo.gif', target_
     # Initialize agent
     agent = Agent()
     if pretrained:
-        checkpoint = agent.load_checkpoint('model/pretrained.pth')
+        checkpoint = agent.load_checkpoint('pretrained.pth')
         if checkpoint is None:
             print("ERROR: model/pretrained.pth not found!")
             sys.exit(1)

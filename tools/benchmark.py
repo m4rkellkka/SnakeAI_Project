@@ -28,8 +28,10 @@ import train_ai
 from snake_game import SnakeGameAI
 
 
-def run_benchmark(checkpoint_path, num_games, seed, render):
-    """Run num_games games for the given checkpoint and return (scores, checkpoint, max_score)."""
+def run_benchmark(checkpoint_path, num_games, seed, render, unstick=True):
+    """Run num_games games and return (scores, checkpoint, max_score, stuck_count).
+    stuck_count = games that ended in a loop-timeout (the failure mode the network
+    fix targets) — most visible with --no-unstick."""
     dirname, basename = os.path.split(checkpoint_path)
     train_ai.MODEL_FOLDER = os.path.join('./model', dirname) if dirname else './model'
 
@@ -57,6 +59,7 @@ def run_benchmark(checkpoint_path, num_games, seed, render):
     max_score = game.grid_cells - 3  # initial snake length is 3 (plain reset())
 
     scores = []
+    stuck_count = 0
     for i in range(num_games):
         # Reseeding per game index before reset() gives identical food-placement
         # sequences across checkpoints for the same --seed (paired comparison) —
@@ -64,17 +67,15 @@ def run_benchmark(checkpoint_path, num_games, seed, render):
         if seed is not None:
             random.seed(seed + i)
         game.reset()
-        done = False
-        while not done:
-            state = agent.get_state(game)
-            action = agent.get_network_action(state, game)
-            done, score = game.play_step(action)
+        score = train_ai.play_game(agent, game, unstick=unstick)
         scores.append(score)
+        if train_ai.game_outcome(game) == 'stuck':
+            stuck_count += 1
 
-    return scores, checkpoint, max_score
+    return scores, checkpoint, max_score, stuck_count
 
 
-def compute_stats(scores, max_score):
+def compute_stats(scores, max_score, stuck_count=0):
     arr = np.array(scores, dtype=float)
     return {
         'n': len(arr),
@@ -88,6 +89,7 @@ def compute_stats(scores, max_score):
         'p75': np.percentile(arr, 75),
         'p90': np.percentile(arr, 90),
         'win_rate': float(np.mean(arr == max_score)),
+        'stuck_rate': stuck_count / len(arr) if len(arr) else 0.0,
     }
 
 
@@ -97,7 +99,7 @@ def print_summary(checkpoint_path, stats, run_config):
           f"std={stats['std']:.2f}")
     print(f"  min={stats['min']:.0f}  p10={stats['p10']:.1f}  p25={stats['p25']:.1f}  "
           f"p75={stats['p75']:.1f}  p90={stats['p90']:.1f}  max={stats['max']:.0f}")
-    print(f"  win_rate={stats['win_rate']:.1%}")
+    print(f"  win_rate={stats['win_rate']:.1%}  stuck_rate={stats['stuck_rate']:.1%}")
     if run_config:
         print(f"  run_config: {run_config}")
 
@@ -105,11 +107,11 @@ def print_summary(checkpoint_path, stats, run_config):
 def print_comparison_table(results):
     """results: list of (checkpoint_path, stats, run_config_or_None)."""
     name_w = 35
-    print("\n" + "=" * (name_w + 60))
+    print("\n" + "=" * (name_w + 68))
     header = (f"{'checkpoint':<{name_w}} {'mean':>7} {'median':>7} {'std':>7} "
-              f"{'min':>5} {'max':>5} {'win%':>7}  run_config")
+              f"{'min':>5} {'max':>5} {'win%':>7} {'stuck%':>7}  run_config")
     print(header)
-    print("-" * (name_w + 60))
+    print("-" * (name_w + 68))
     for path, stats, run_config in results:
         label = path if len(path) <= name_w else '...' + path[-(name_w - 3):]
         cfg_str = ''
@@ -117,8 +119,8 @@ def print_comparison_table(results):
             cfg_str = ', '.join(f"{k}={v}" for k, v in run_config.items())
         print(f"{label:<{name_w}} {stats['mean']:>7.2f} {stats['median']:>7.1f} "
               f"{stats['std']:>7.2f} {stats['min']:>5.0f} {stats['max']:>5.0f} "
-              f"{stats['win_rate']:>6.1%}  {cfg_str}")
-    print("=" * (name_w + 60))
+              f"{stats['win_rate']:>6.1%} {stats['stuck_rate']:>6.1%}  {cfg_str}")
+    print("=" * (name_w + 68))
 
 
 def write_csv(path, all_scores):
@@ -165,6 +167,9 @@ def main():
                          help='Save overlaid score-distribution histogram to PATH')
     parser.add_argument('--csv', type=str, default=None, metavar='PATH',
                          help='Save long-format per-game scores (checkpoint,game_index,score) to PATH')
+    parser.add_argument('--no-unstick', action='store_true',
+                         help='Disable the teacher-assisted loop-breaking fallback '
+                              '(pure honest network policy)')
     args = parser.parse_args()
 
     checkpoints = args.checkpoint if args.checkpoint else ['checkpoint_best.pth']
@@ -177,10 +182,10 @@ def main():
     for checkpoint_path in checkpoints:
         print(f"\nRunning {args.games} games for {checkpoint_path}"
               + (" (render, speed=30)" if args.render else " (headless)"))
-        scores, checkpoint, max_score = run_benchmark(
-            checkpoint_path, args.games, args.seed, args.render
+        scores, checkpoint, max_score, stuck_count = run_benchmark(
+            checkpoint_path, args.games, args.seed, args.render, unstick=not args.no_unstick
         )
-        stats = compute_stats(scores, max_score)
+        stats = compute_stats(scores, max_score, stuck_count)
         run_config = checkpoint.get('run_config') if checkpoint else None
 
         print_summary(checkpoint_path, stats, run_config)

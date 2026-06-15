@@ -1,5 +1,7 @@
+
+
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, filedialog
 import subprocess
 import os
 import sys
@@ -13,6 +15,19 @@ DIR = os.path.dirname(os.path.abspath(__file__))
 TRAIN_AI = os.path.join("src", "train_ai.py")
 TEACHER = os.path.join("src", "teacher.py")
 PLAY_MANUAL = os.path.join("src", "play_manual.py")
+RECORD_DEMO = os.path.join("tools", "record_demo.py")
+
+
+def find_model_names():
+    """Available model run-names: '(default)' (model/) plus subfolders of model/."""
+    model_dir = os.path.join(DIR, "model")
+    names = ["(default)"]
+    if os.path.isdir(model_dir):
+        for entry in sorted(os.listdir(model_dir)):
+            if os.path.isdir(os.path.join(model_dir, entry)):
+                names.append(entry)
+    return names
+
 
 # ──────────────────────────────────────────────────
 # Color palette (premium dark theme)
@@ -35,6 +50,112 @@ ACCENT_RED = "#ff4466"
 ACCENT_ORANGE = "#ff8844"
 LOG_BG = "#111114"
 LOG_FG = "#c8c8d0"
+
+TOOLTIP_BG = "#1e1e24"
+TOOLTIP_FG = "#ccccdd"
+TOAST_SUCCESS_BG = "#0a2a18"
+TOAST_SUCCESS_BORDER = "#00e878"
+TOAST_ERROR_BG = "#2a0a14"
+TOAST_ERROR_BORDER = "#ff4466"
+
+
+# ──────────────────────────────────────────────────
+# Tooltip widget
+# ──────────────────────────────────────────────────
+class Tooltip:
+    """Show a tooltip on hover for any widget."""
+
+    def __init__(self, widget, text, delay=400):
+        self.widget = widget
+        self.text = text
+        self.delay = delay
+        self._tip_window = None
+        self._after_id = None
+
+        widget.bind("<Enter>", self._schedule, add="+")
+        widget.bind("<Leave>", self._hide, add="+")
+        widget.bind("<Button-1>", self._hide, add="+")
+
+    def _schedule(self, event=None):
+        self._hide()
+        self._after_id = self.widget.after(self.delay, self._show)
+
+    def _show(self):
+        if self._tip_window:
+            return
+        x = self.widget.winfo_rootx() + 20
+        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 4
+
+        self._tip_window = tw = tk.Toplevel(self.widget)
+        tw.wm_overrideredirect(True)
+        tw.wm_geometry(f"+{x}+{y}")
+
+        frame = tk.Frame(tw, bg=TOOLTIP_BG, highlightbackground=BORDER_COLOR,
+                         highlightthickness=1)
+        frame.pack()
+
+        label = tk.Label(frame, text=self.text, bg=TOOLTIP_BG, fg=TOOLTIP_FG,
+                         font=("Helvetica Neue", 11), padx=10, pady=6,
+                         wraplength=280, justify=tk.LEFT)
+        label.pack()
+
+    def _hide(self, event=None):
+        if self._after_id:
+            self.widget.after_cancel(self._after_id)
+            self._after_id = None
+        if self._tip_window:
+            self._tip_window.destroy()
+            self._tip_window = None
+
+
+# ──────────────────────────────────────────────────
+# Toast notification
+# ──────────────────────────────────────────────────
+class ToastNotification:
+    """Slide-in notification at the top of a window."""
+
+    def __init__(self, parent):
+        self.parent = parent
+        self._toast_frame = None
+        self._hide_id = None
+
+    def show(self, message, kind="success", duration=2500):
+        """Show a toast. kind = 'success' | 'error'."""
+        self._dismiss()
+
+        bg = TOAST_SUCCESS_BG if kind == "success" else TOAST_ERROR_BG
+        border = TOAST_SUCCESS_BORDER if kind == "success" else TOAST_ERROR_BORDER
+        icon = "✓" if kind == "success" else "✕"
+        icon_color = ACCENT_GREEN if kind == "success" else ACCENT_RED
+
+        self._toast_frame = tk.Frame(self.parent, bg=bg,
+                                      highlightbackground=border,
+                                      highlightthickness=1)
+        self._toast_frame.place(relx=0.5, y=8, anchor=tk.N)
+
+        inner = tk.Frame(self._toast_frame, bg=bg)
+        inner.pack(padx=16, pady=8)
+
+        tk.Label(inner, text=icon, font=("", 13), bg=bg, fg=icon_color
+                 ).pack(side=tk.LEFT, padx=(0, 8))
+        tk.Label(inner, text=message, font=("Helvetica Neue", 11),
+                 bg=bg, fg=TEXT_PRIMARY).pack(side=tk.LEFT)
+
+        self._hide_id = self.parent.after(duration, self._dismiss)
+
+    def _dismiss(self):
+        if self._hide_id:
+            try:
+                self.parent.after_cancel(self._hide_id)
+            except Exception:
+                pass
+            self._hide_id = None
+        if self._toast_frame:
+            try:
+                self._toast_frame.destroy()
+            except Exception:
+                pass
+            self._toast_frame = None
 
 
 # ──────────────────────────────────────────────────
@@ -70,6 +191,7 @@ class TrainingDashboard(tk.Toplevel):
         self._progress_pos = 0
 
         self._build_ui()
+        self._on_model_selected()
 
     # ──────────────────────────────────────────────
     # UI Construction
@@ -120,6 +242,43 @@ class TrainingDashboard(tk.Toplevel):
         self._progress_canvas = tk.Canvas(self, height=2, bg=BG_DARK,
                                            highlightthickness=0)
         self._progress_canvas.pack(fill=tk.X)
+
+        # ── Model selection ──
+        model_row = tk.Frame(self, bg=BG_DARK)
+        model_row.pack(fill=tk.X, padx=24, pady=(12, 0))
+
+        tk.Label(model_row, text="MODEL", font=("Helvetica Neue", 10, "bold"),
+                 bg=BG_DARK, fg=TEXT_MUTED).pack(side=tk.LEFT, padx=(0, 10))
+
+        self.option_add('*TCombobox*Listbox.background', BG_CARD)
+        self.option_add('*TCombobox*Listbox.foreground', TEXT_PRIMARY)
+        self.option_add('*TCombobox*Listbox.selectBackground', BG_BUTTON_HOVER)
+        self.option_add('*TCombobox*Listbox.selectForeground', ACCENT_GREEN)
+
+        style = ttk.Style(self)
+        style.theme_use('clam')
+        style.configure("Dark.TCombobox",
+                        fieldbackground=BG_CARD, background=BG_CARD,
+                        foreground=TEXT_PRIMARY, arrowcolor=TEXT_PRIMARY,
+                        bordercolor=BORDER_COLOR, borderwidth=1)
+        style.map("Dark.TCombobox",
+                  fieldbackground=[('readonly', BG_CARD)],
+                  background=[('active', BG_BUTTON_HOVER)])
+
+        self._model_var = tk.StringVar(value="(default)")
+        self._model_combo = ttk.Combobox(model_row, textvariable=self._model_var,
+                                          values=self._find_models(),
+                                          style="Dark.TCombobox",
+                                          font=("SF Mono", 11), width=26)
+        self._model_combo.pack(side=tk.LEFT)
+        self._model_combo.bind("<<ComboboxSelected>>", self._on_model_selected)
+        self._model_combo.bind("<Return>", self._on_model_selected)
+        self._model_combo.bind("<FocusOut>", self._on_model_selected)
+
+        self._model_info_label = tk.Label(model_row, text="",
+                                           font=("Helvetica Neue", 10),
+                                           bg=BG_DARK, fg=TEXT_SECONDARY)
+        self._model_info_label.pack(side=tk.LEFT, padx=(14, 0))
 
         # ── Stats cards ──
         stats_outer = tk.Frame(self, bg=BG_DARK)
@@ -352,14 +511,20 @@ class TrainingDashboard(tk.Toplevel):
         self._start_time = time.time()
         self._status_label.configure(text="Training", fg=ACCENT_GREEN)
         self._action_btn.configure(text="■  STOP TRAINING", bg=ACCENT_RED, fg="white")
+        self._model_combo.configure(state="disabled")
 
         # Start animations
         self._start_pulse()
         self._start_progress_anim()
         self._update_elapsed()
 
+        cmd = [sys.executable, "-u", TRAIN_AI, "--headless"]
+        model_name = self._model_var.get().strip()
+        if model_name and model_name != "(default)":
+            cmd.extend(["--run-name", model_name])
+
         self._process = subprocess.Popen(
-            [sys.executable, "-u", TRAIN_AI, "--headless"],
+            cmd,
             cwd=DIR,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -436,14 +601,7 @@ class TrainingDashboard(tk.Toplevel):
                             text=part.replace("Loss:", "").strip())
                     elif part.startswith("Steps:"):
                         steps = int(part.replace("Steps:", "").strip())
-                        if steps >= 1_000_000:
-                            self._stats["Steps"].configure(
-                                text=f"{steps/1_000_000:.1f}M")
-                        elif steps >= 1000:
-                            self._stats["Steps"].configure(
-                                text=f"{steps/1000:.0f}K")
-                        else:
-                            self._stats["Steps"].configure(text=str(steps))
+                        self._stats["Steps"].configure(text=self._format_steps(steps))
 
             elif "Honest eval:" in line:
                 # "  >> Honest eval: avg=8.5, max=42 (15 games)"
@@ -459,6 +617,79 @@ class TrainingDashboard(tk.Toplevel):
         except (IndexError, ValueError):
             pass
 
+    # ──────────────────────────────────────────────
+    # Model selection
+    # ──────────────────────────────────────────────
+    def _find_models(self):
+        """Available model run-names: '(default)' (model/) plus subfolders of model/."""
+        return find_model_names()
+
+    def _model_folder(self, name=None):
+        name = (name if name is not None else self._model_var.get()).strip()
+        if not name or name == "(default)":
+            return os.path.join(DIR, "model")
+        return os.path.join(DIR, "model", name)
+
+    def _learning_curve_path(self, name=None):
+        name = (name if name is not None else self._model_var.get()).strip()
+        if not name or name == "(default)":
+            return os.path.join(DIR, "learning_curve.png")
+        return os.path.join(DIR, "model", name, "learning_curve.png")
+
+    @staticmethod
+    def _format_steps(steps):
+        if steps >= 1_000_000:
+            return f"{steps/1_000_000:.1f}M"
+        elif steps >= 1000:
+            return f"{steps/1000:.0f}K"
+        return str(steps)
+
+    def _load_checkpoint_info(self, folder):
+        """Read n_games/total_steps/best eval from this model's last checkpoint, if any."""
+        import torch
+        for fname in ("checkpoint_last.pth", "checkpoint_best.pth"):
+            path = os.path.join(folder, fname)
+            if os.path.exists(path):
+                try:
+                    cp = torch.load(path, map_location="cpu", weights_only=True)
+                except Exception:
+                    continue
+                return {
+                    "n_games": cp.get("n_games", 0),
+                    "total_steps": cp.get("total_steps", 0),
+                    "best_eval_score": cp.get("best_eval_score", cp.get("eval_score", 0.0)),
+                }
+        return None
+
+    def _on_model_selected(self, event=None):
+        """Refresh the 'latest results' preview (stats + chart) for the selected model."""
+        if self._running:
+            return
+        name = self._model_var.get().strip() or "(default)"
+        if name not in self._model_combo["values"]:
+            self._model_combo["values"] = (*self._model_combo["values"], name)
+
+        info = self._load_checkpoint_info(self._model_folder(name))
+        if info:
+            games = info["n_games"]
+            steps = self._format_steps(info["total_steps"])
+            best = info["best_eval_score"]
+            self._model_info_label.configure(
+                text=f"Last: {games} games · {steps} steps · best eval {best:.1f}",
+                fg=TEXT_SECONDARY)
+            self._stats["Game"].configure(text=str(games))
+            self._stats["Steps"].configure(text=steps)
+            self._stats["Best Eval"].configure(text=f"{best:.1f}", fg=TEXT_PRIMARY)
+            self._stats["Score"].configure(text="—")
+            self._stats["Loss"].configure(text="—")
+        else:
+            self._model_info_label.configure(text="No checkpoint yet — will start fresh",
+                                              fg=TEXT_MUTED)
+            for stat in self._stats.values():
+                stat.configure(text="—", fg=TEXT_PRIMARY)
+
+        self._refresh_chart()
+
     def _schedule_chart_refresh(self):
         if not self._running:
             return
@@ -466,8 +697,12 @@ class TrainingDashboard(tk.Toplevel):
         self.after(15000, self._schedule_chart_refresh)  # Every 15 seconds
 
     def _refresh_chart(self):
-        plot_path = os.path.join(DIR, "learning_curve.png")
+        plot_path = self._learning_curve_path()
         if not os.path.exists(plot_path):
+            self._chart_image = None
+            self._chart_label.configure(
+                image="", text="No data yet — start training to see the learning curve")
+            self._chart_time_label.configure(text="")
             return
         try:
             # Use PIL for precise high-quality resizing to avoid cutoff
@@ -509,6 +744,7 @@ class TrainingDashboard(tk.Toplevel):
             self._running = False
             self._status_label.configure(text="Stopped", fg=ACCENT_RED)
             self._action_btn.configure(text="▶  START TRAINING", bg=ACCENT_GREEN, fg="#000000")
+            self._model_combo.configure(state="normal")
             self._stop_pulse(ACCENT_RED)
             self._stop_progress_anim()
             self._stop_elapsed()
@@ -519,9 +755,11 @@ class TrainingDashboard(tk.Toplevel):
         self._stop_elapsed()
         try:
             if self.winfo_exists() and self._status_label.winfo_exists():
+                self._model_combo.configure(state="normal")
                 if self._status_label.cget("text") != "Stopped":
                     self._status_label.configure(text="Finished", fg=ACCENT_ORANGE)
                     self._stop_pulse(ACCENT_ORANGE)
+                    self._action_btn.configure(text="▶  START TRAINING", bg=ACCENT_GREEN, fg="#000000")
         except tk.TclError:
             pass
 
@@ -884,6 +1122,7 @@ class SweepRunDashboard(tk.Toplevel):
                 if self._status_label.cget("text") != "Stopped":
                     self._status_label.configure(text="Finished", fg=ACCENT_ORANGE)
                     self._stop_pulse(ACCENT_ORANGE)
+                    self._action_btn.configure(text="▶  START SWEEP", bg=ACCENT_GREEN, fg="#000000")
         except tk.TclError:
             pass
 
@@ -920,6 +1159,7 @@ class BenchmarkDashboard(tk.Toplevel):
         self._progress_pos = 0
         self._temp_plot_path = None
         self._available_cps = []
+        self._last_csv_data = None  # Store last benchmark output for CSV export
 
         self._build_ui()
 
@@ -978,13 +1218,32 @@ class BenchmarkDashboard(tk.Toplevel):
         # Checkpoints selection
         cp_frame = tk.Frame(inputs_outer, bg=BG_CARD, highlightbackground=BORDER_COLOR, highlightthickness=1)
         cp_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 10))
-        
-        tk.Label(cp_frame, text="Select Checkpoints (Checkboxes):", bg=BG_CARD, fg=TEXT_MUTED).pack(anchor=tk.W, padx=10, pady=(10, 5))
-        
+
+        # Checkpoint header with Select All / Deselect All
+        cp_header = tk.Frame(cp_frame, bg=BG_CARD)
+        cp_header.pack(fill=tk.X, padx=10, pady=(10, 5))
+
+        tk.Label(cp_header, text="Select Checkpoints:", bg=BG_CARD, fg=TEXT_MUTED,
+                 font=("Helvetica Neue", 10)).pack(side=tk.LEFT)
+
+        deselect_btn = tk.Label(cp_header, text="Deselect All", bg=BG_CARD, fg=TEXT_MUTED,
+                                font=("Helvetica Neue", 9), cursor="hand2")
+        deselect_btn.pack(side=tk.RIGHT, padx=(6, 0))
+        deselect_btn.bind("<Button-1>", lambda e: self._toggle_all_checkpoints(False))
+        deselect_btn.bind("<Enter>", lambda e: deselect_btn.configure(fg=ACCENT_RED))
+        deselect_btn.bind("<Leave>", lambda e: deselect_btn.configure(fg=TEXT_MUTED))
+
+        select_btn = tk.Label(cp_header, text="Select All", bg=BG_CARD, fg=ACCENT_CYAN,
+                              font=("Helvetica Neue", 9), cursor="hand2")
+        select_btn.pack(side=tk.RIGHT, padx=(0, 6))
+        select_btn.bind("<Button-1>", lambda e: self._toggle_all_checkpoints(True))
+        select_btn.bind("<Enter>", lambda e: select_btn.configure(fg=ACCENT_GREEN))
+        select_btn.bind("<Leave>", lambda e: select_btn.configure(fg=ACCENT_CYAN))
+
         list_frame = tk.Frame(cp_frame, bg=BG_CARD)
         list_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
         
-        # Use a canvas for actual checkboxes to fulfill "как чекбоксы" request exactly
+        # Use a canvas for actual checkboxes
         self.canvas_cb = tk.Canvas(list_frame, bg=BG_CARD, highlightthickness=0)
         scroll_cb = tk.Scrollbar(list_frame, orient=tk.VERTICAL, command=self.canvas_cb.yview, bg=BG_DARK)
         self.inner_cb_frame = tk.Frame(self.canvas_cb, bg=BG_CARD)
@@ -1015,22 +1274,53 @@ class BenchmarkDashboard(tk.Toplevel):
         self.entry_games = self._make_input(params_frame, "Games (default 100):")
         self.entry_seed = self._make_input(params_frame, "Seed (optional):")
 
+        # ── Options row ──
+        options_frame = tk.Frame(params_frame, bg=BG_DARK)
+        options_frame.pack(fill=tk.X, padx=10, pady=(10, 5))
+
+
+        self._render_var = tk.BooleanVar(value=False)
+        render_cb = tk.Checkbutton(
+            options_frame, text="Show game window",
+            variable=self._render_var, bg=BG_DARK, fg=TEXT_PRIMARY,
+            selectcolor=BG_CARD, activebackground=BG_DARK,
+            activeforeground=ACCENT_GREEN, font=("Helvetica Neue", 10))
+        render_cb.pack(anchor=tk.W, pady=2)
+        Tooltip(render_cb, "Render the game during benchmark.\nSlower but lets you watch the AI play.")
+
         # ── Bottom action bar ──
         bottom = tk.Frame(self, bg=BG_DARK)
         bottom.pack(side=tk.BOTTOM, fill=tk.X, padx=24, pady=(10, 18))
 
+        bottom_row = tk.Frame(bottom, bg=BG_DARK)
+        bottom_row.pack(fill=tk.X)
+
         self._action_btn = tk.Label(
-            bottom, text="▶  RUN BENCHMARK",
+            bottom_row, text="▶  RUN BENCHMARK",
             font=("Helvetica Neue", 13, "bold"),
             bg=ACCENT_ORANGE, fg="#000000", cursor="hand2",
             padx=24, pady=12
         )
-        self._action_btn.pack(fill=tk.X)
+        self._action_btn.pack(side=tk.LEFT, fill=tk.X, expand=True)
         self._action_btn.bind("<Button-1>", lambda e: self._on_action_click())
         self._action_btn.bind("<Enter>", lambda e: self._action_btn.configure(
             bg="#ffaa66" if not self._running else "#ff2244"))
         self._action_btn.bind("<Leave>", lambda e: self._action_btn.configure(
             bg=ACCENT_ORANGE if not self._running else ACCENT_RED))
+
+        self._csv_btn = tk.Label(
+            bottom_row, text="💾 CSV",
+            font=("Helvetica Neue", 12, "bold"),
+            bg=BG_BUTTON, fg=TEXT_MUTED, cursor="hand2",
+            padx=16, pady=12
+        )
+        self._csv_btn.pack(side=tk.RIGHT, padx=(8, 0))
+        self._csv_btn.bind("<Button-1>", lambda e: self._export_csv())
+        self._csv_btn.bind("<Enter>", lambda e: self._csv_btn.configure(
+            bg=BG_BUTTON_HOVER, fg=ACCENT_CYAN))
+        self._csv_btn.bind("<Leave>", lambda e: self._csv_btn.configure(
+            bg=BG_BUTTON, fg=TEXT_MUTED if not self._last_csv_data else ACCENT_CYAN))
+        Tooltip(self._csv_btn, "Export benchmark results to CSV file.\nAvailable after a benchmark run completes.")
 
         # ── Log area ──
         log_section = tk.Frame(self, bg=BG_DARK, height=180)
@@ -1081,6 +1371,11 @@ class BenchmarkDashboard(tk.Toplevel):
         self._chart_image = None
 
         self.protocol("WM_DELETE_WINDOW", self._on_close)
+
+    def _toggle_all_checkpoints(self, state):
+        """Select or deselect all checkpoints."""
+        for var in self._cp_vars.values():
+            var.set(state)
 
     def _make_input(self, parent, label_text):
         frame = tk.Frame(parent, bg=BG_DARK)
@@ -1178,8 +1473,17 @@ class BenchmarkDashboard(tk.Toplevel):
         seed = self.entry_seed.get().strip()
         if seed: cmd.extend(["--seed", seed])
 
+
+        # Render option
+        if self._render_var.get():
+            cmd.append("--render")
+
         self._temp_plot_path = os.path.join(DIR, f"temp_benchmark_{int(time.time())}.png")
         cmd.extend(["--plot", self._temp_plot_path])
+
+        # CSV temp path for export
+        self._temp_csv_path = os.path.join(DIR, f"temp_benchmark_{int(time.time())}.csv")
+        cmd.extend(["--csv", self._temp_csv_path])
 
         self._process = subprocess.Popen(
             cmd, cwd=DIR, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1
@@ -1210,6 +1514,24 @@ class BenchmarkDashboard(tk.Toplevel):
 
         self._log_line_count += 1
         self._log_count_label.configure(text=f"{self._log_line_count} lines")
+
+    def _export_csv(self):
+        """Export benchmark CSV to user-chosen location."""
+        if hasattr(self, '_temp_csv_path') and os.path.exists(self._temp_csv_path):
+            dest = filedialog.asksaveasfilename(
+                parent=self,
+                title="Export Benchmark CSV",
+                defaultextension=".csv",
+                filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
+                initialfile="benchmark_results.csv"
+            )
+            if dest:
+                import shutil
+                shutil.copy2(self._temp_csv_path, dest)
+                messagebox.showinfo("Export", f"CSV saved to:\n{dest}", parent=self)
+        else:
+            messagebox.showinfo("Export", "No benchmark data available yet.\nRun a benchmark first.",
+                                parent=self)
 
     def _refresh_chart(self):
         if not self._temp_plot_path or not os.path.exists(self._temp_plot_path): return
@@ -1251,9 +1573,23 @@ class BenchmarkDashboard(tk.Toplevel):
                 if self._status_label.cget("text") != "Stopped":
                     self._status_label.configure(text="Finished", fg=ACCENT_ORANGE)
                     self._stop_pulse(ACCENT_ORANGE)
+                    self._action_btn.configure(text="▶  RUN BENCHMARK", bg=ACCENT_ORANGE, fg="#000000")
                     self.after(500, self._refresh_chart)
+                    # Enable CSV button highlight
+                    if hasattr(self, '_temp_csv_path') and os.path.exists(self._temp_csv_path):
+                        self._last_csv_data = True
+                        self._csv_btn.configure(fg=ACCENT_CYAN)
         except tk.TclError:
             pass
+
+    def _cleanup_temp_files(self):
+        """Remove temporary benchmark plot/csv files."""
+        for pattern in ["temp_benchmark_*.png", "temp_benchmark_*.csv"]:
+            for f in glob.glob(os.path.join(DIR, pattern)):
+                try:
+                    os.remove(f)
+                except OSError:
+                    pass
 
     def _on_close(self):
         if self._process and self._process.poll() is None:
@@ -1262,7 +1598,334 @@ class BenchmarkDashboard(tk.Toplevel):
         self._stop_pulse()
         self._stop_progress_anim()
         self._stop_elapsed()
+        self._cleanup_temp_files()
         self.destroy()
+
+
+# ──────────────────────────────────────────────────
+# Record Demo Dialog (Toplevel window)
+# ──────────────────────────────────────────────────
+class RecordDemoDialog(tk.Toplevel):
+    """Dialog for recording GIF demos of the AI."""
+
+    def __init__(self, master):
+        super().__init__(master)
+        self.title("Snake AI — Record GIF Demo")
+        self.configure(bg=BG_DARK)
+        self.resizable(False, False)
+        self.geometry("460x380")
+
+        self._process = None
+        self._running = False
+        self._toast = ToastNotification(self)
+
+        self._build_ui()
+
+        # Center on parent
+        self.transient(master)
+        self.update_idletasks()
+        x = master.winfo_rootx() + (master.winfo_width() - 460) // 2
+        y = master.winfo_rooty() + (master.winfo_height() - 380) // 2
+        self.geometry(f"+{x}+{y}")
+
+    def _build_ui(self):
+        # Header
+        header = tk.Frame(self, bg="#101014")
+        header.pack(fill=tk.X)
+
+        header_inner = tk.Frame(header, bg="#101014")
+        header_inner.pack(fill=tk.X, padx=20, pady=(12, 10))
+
+        tk.Label(header_inner, text="📹", font=("", 18), bg="#101014", fg=ACCENT_PURPLE
+                 ).pack(side=tk.LEFT, padx=(0, 10))
+
+        title_block = tk.Frame(header_inner, bg="#101014")
+        title_block.pack(side=tk.LEFT)
+        tk.Label(title_block, text="RECORD GIF DEMO",
+                 font=("Helvetica Neue", 14, "bold"),
+                 bg="#101014", fg=TEXT_PRIMARY).pack(anchor=tk.W)
+        tk.Label(title_block, text="Generate animated GIF of AI gameplay",
+                 font=("Helvetica Neue", 10),
+                 bg="#101014", fg=TEXT_MUTED).pack(anchor=tk.W)
+
+        # Options
+        body = tk.Frame(self, bg=BG_DARK, padx=20, pady=14)
+        body.pack(fill=tk.BOTH, expand=True)
+
+        tk.Label(body, text="MODE", font=("Helvetica Neue", 10, "bold"),
+                 bg=BG_DARK, fg=TEXT_MUTED).pack(anchor=tk.W, pady=(0, 6))
+
+        self._mode_var = tk.StringVar(value="pretrained")
+
+        modes = [
+            ("pretrained", "Pretrained Model", "Use pretrained.pth — shows trained AI skill"),
+            ("untrained", "Untrained Network", "Random network — shows baseline before training"),
+            ("both", "Both", "Record pretrained AND untrained side by side"),
+        ]
+
+        for val, label, desc in modes:
+            row = tk.Frame(body, bg=BG_DARK)
+            row.pack(fill=tk.X, pady=2)
+            rb = tk.Radiobutton(row, text=label, variable=self._mode_var, value=val,
+                                bg=BG_DARK, fg=TEXT_PRIMARY, selectcolor=BG_CARD,
+                                activebackground=BG_DARK, activeforeground=ACCENT_GREEN,
+                                font=("Helvetica Neue", 11))
+            rb.pack(side=tk.LEFT)
+            tk.Label(row, text=f"  {desc}", bg=BG_DARK, fg=TEXT_MUTED,
+                     font=("Helvetica Neue", 9)).pack(side=tk.LEFT)
+
+        # Status
+        self._status_label = tk.Label(body, text="Ready to record",
+                                       font=("Helvetica Neue", 10),
+                                       bg=BG_DARK, fg=TEXT_MUTED)
+        self._status_label.pack(anchor=tk.W, pady=(16, 0))
+
+        # Progress dots
+        self._progress_label = tk.Label(body, text="",
+                                         font=("SF Mono", 10),
+                                         bg=BG_DARK, fg=ACCENT_PURPLE)
+        self._progress_label.pack(anchor=tk.W, pady=(4, 0))
+
+        # Action button
+        self._action_btn = tk.Label(
+            body, text="⏺  START RECORDING",
+            font=("Helvetica Neue", 12, "bold"),
+            bg=ACCENT_PURPLE, fg="white", cursor="hand2",
+            padx=20, pady=10
+        )
+        self._action_btn.pack(fill=tk.X, pady=(16, 0))
+        self._action_btn.bind("<Button-1>", lambda e: self._on_action())
+        self._action_btn.bind("<Enter>", lambda e: self._action_btn.configure(
+            bg="#9955ee" if not self._running else "#ff2244"))
+        self._action_btn.bind("<Leave>", lambda e: self._action_btn.configure(
+            bg=ACCENT_PURPLE if not self._running else ACCENT_RED))
+
+        # Open folder button (hidden until done)
+        self._open_btn = tk.Label(
+            body, text="📂  Open assets folder",
+            font=("Helvetica Neue", 10),
+            bg=BG_BUTTON, fg=TEXT_SECONDARY, cursor="hand2",
+            padx=12, pady=6
+        )
+        self._open_btn.bind("<Button-1>", lambda e: self._open_assets())
+        self._open_btn.bind("<Enter>", lambda e: self._open_btn.configure(fg=ACCENT_CYAN))
+        self._open_btn.bind("<Leave>", lambda e: self._open_btn.configure(fg=TEXT_SECONDARY))
+        # Not packed yet — shown after recording
+
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
+
+    def _on_action(self):
+        if self._running:
+            self._stop()
+        else:
+            self._start()
+
+    def _start(self):
+        mode = self._mode_var.get()
+        self._running = True
+        self._status_label.configure(text=f"Recording {mode}...", fg=ACCENT_PURPLE)
+        self._action_btn.configure(text="■  STOP RECORDING", bg=ACCENT_RED)
+
+        cmd = [sys.executable, "-u", RECORD_DEMO, mode]
+        self._process = subprocess.Popen(
+            cmd, cwd=DIR, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1
+        )
+        self._reader_thread = threading.Thread(target=self._read_output, daemon=True)
+        self._reader_thread.start()
+
+    def _read_output(self):
+        try:
+            for line in self._process.stdout:
+                line = line.rstrip('\n')
+                if line:
+                    self.after(0, self._update_progress, line)
+        except Exception:
+            pass
+        finally:
+            self.after(0, self._on_done)
+
+    def _update_progress(self, line):
+        # Show last meaningful line
+        if "Frame" in line or "Saved" in line or "Recording" in line or "ERROR" in line:
+            self._progress_label.configure(text=line[:60])
+
+    def _on_done(self):
+        self._running = False
+        self._action_btn.configure(text="⏺  START RECORDING", bg=ACCENT_PURPLE)
+
+        if self._process and self._process.returncode == 0:
+            self._status_label.configure(text="✓ Recording complete!", fg=ACCENT_GREEN)
+            self._progress_label.configure(text="GIF saved to assets/ folder")
+            self._open_btn.pack(fill=tk.X, pady=(8, 0))
+        else:
+            self._status_label.configure(text="Recording failed", fg=ACCENT_RED)
+
+    def _stop(self):
+        if self._process and self._process.poll() is None:
+            self._process.terminate()
+        self._running = False
+        self._status_label.configure(text="Stopped", fg=ACCENT_RED)
+        self._action_btn.configure(text="⏺  START RECORDING", bg=ACCENT_PURPLE)
+
+    def _open_assets(self):
+        assets_dir = os.path.join(DIR, "assets")
+        if sys.platform == "darwin":
+            subprocess.run(["open", assets_dir])
+        elif sys.platform == "win32":
+            os.startfile(assets_dir)
+        else:
+            subprocess.run(["xdg-open", assets_dir])
+
+    def _on_close(self):
+        if self._process and self._process.poll() is None:
+            self._process.terminate()
+        self.destroy()
+
+
+# ──────────────────────────────────────────────────
+# Watch Results Dialog (Toplevel window)
+# ──────────────────────────────────────────────────
+class WatchResultsDialog(tk.Toplevel):
+    """Streams a `--watch` run's stdout (checkpoint info, per-game scores, final
+    average/max) into a log panel alongside the separate pygame game window."""
+
+    def __init__(self, master, cmd, subtitle):
+        super().__init__(master)
+        self.title("Snake AI — Test Results")
+        self.configure(bg=BG_DARK)
+        self.resizable(False, False)
+        self.geometry("420x360")
+
+        self._process = None
+        self._running = True
+
+        self._build_ui(subtitle)
+
+        self.transient(master)
+        self.update_idletasks()
+        x = master.winfo_rootx() + (master.winfo_width() - 420) // 2
+        y = master.winfo_rooty() + (master.winfo_height() - 360) // 2
+        self.geometry(f"+{x}+{y}")
+
+        self._start(cmd)
+
+    def _build_ui(self, subtitle):
+        # Header
+        header = tk.Frame(self, bg="#101014")
+        header.pack(fill=tk.X)
+
+        header_inner = tk.Frame(header, bg="#101014")
+        header_inner.pack(fill=tk.X, padx=20, pady=(12, 10))
+
+        tk.Label(header_inner, text="🎮", font=("", 18), bg="#101014", fg=ACCENT_BLUE
+                 ).pack(side=tk.LEFT, padx=(0, 10))
+
+        title_block = tk.Frame(header_inner, bg="#101014")
+        title_block.pack(side=tk.LEFT)
+        tk.Label(title_block, text="TEST RESULTS",
+                 font=("Helvetica Neue", 14, "bold"),
+                 bg="#101014", fg=TEXT_PRIMARY).pack(anchor=tk.W)
+        tk.Label(title_block, text=subtitle,
+                 font=("Helvetica Neue", 10),
+                 bg="#101014", fg=TEXT_MUTED).pack(anchor=tk.W)
+
+        self._status_label = tk.Label(header_inner, text="Running",
+                                       font=("Helvetica Neue", 11),
+                                       bg="#101014", fg=ACCENT_ORANGE)
+        self._status_label.pack(side=tk.RIGHT)
+
+        # Log area
+        log_container = tk.Frame(self, bg=LOG_BG, highlightbackground=BORDER_COLOR,
+                                  highlightthickness=1)
+        log_container.pack(fill=tk.BOTH, expand=True, padx=20, pady=(10, 6))
+
+        log_scrollbar = tk.Scrollbar(log_container, orient=tk.VERTICAL, troughcolor=LOG_BG, bg="#222228")
+        log_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        self._log_text = tk.Text(log_container, bg=LOG_BG, fg=LOG_FG, font=("SF Mono", 11),
+                                  insertbackground=ACCENT_GREEN, selectbackground="#334455",
+                                  relief=tk.FLAT, padx=12, pady=8, wrap=tk.WORD,
+                                  yscrollcommand=log_scrollbar.set, state=tk.DISABLED)
+        self._log_text.pack(fill=tk.BOTH, expand=True)
+        log_scrollbar.config(command=self._log_text.yview)
+
+        self._log_text.tag_configure("info", foreground=ACCENT_CYAN)
+        self._log_text.tag_configure("game", foreground=LOG_FG)
+        self._log_text.tag_configure("summary", foreground=ACCENT_GREEN, font=("SF Mono", 11, "bold"))
+        self._log_text.tag_configure("error", foreground=ACCENT_RED)
+
+        # Stop / Close button
+        self._action_btn = tk.Label(
+            self, text="■  STOP",
+            font=("Helvetica Neue", 12, "bold"),
+            bg=ACCENT_RED, fg="white", cursor="hand2",
+            padx=20, pady=8
+        )
+        self._action_btn.pack(fill=tk.X, padx=20, pady=(0, 14))
+        self._action_btn.bind("<Button-1>", lambda e: self._on_action())
+        self._action_btn.bind("<Enter>", lambda e: self._action_btn.configure(
+            bg="#ff2244" if self._running else BG_BUTTON_HOVER))
+        self._action_btn.bind("<Leave>", lambda e: self._action_btn.configure(
+            bg=ACCENT_RED if self._running else BG_BUTTON))
+
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
+
+    def _start(self, cmd):
+        self._process = subprocess.Popen(
+            cmd, cwd=DIR, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1
+        )
+        self._reader_thread = threading.Thread(target=self._read_output, daemon=True)
+        self._reader_thread.start()
+
+    def _read_output(self):
+        try:
+            for line in self._process.stdout:
+                line = line.rstrip('\n')
+                if line:
+                    self.after(0, self._append_log, line)
+        except Exception:
+            pass
+        finally:
+            self.after(0, self._on_process_ended)
+
+    def _append_log(self, line):
+        tag = "game"
+        if line.startswith("Loaded") or line.startswith("Resuming"):
+            tag = "info"
+        elif line.startswith("Average:"):
+            tag = "summary"
+        elif "not found" in line or "ERROR" in line:
+            tag = "error"
+
+        self._log_text.configure(state=tk.NORMAL)
+        self._log_text.insert(tk.END, line + "\n", tag)
+        self._log_text.see(tk.END)
+        self._log_text.configure(state=tk.DISABLED)
+
+    def _on_process_ended(self):
+        self._running = False
+        try:
+            if self.winfo_exists():
+                if self._status_label.cget("text") == "Running":
+                    self._status_label.configure(text="Done", fg=ACCENT_GREEN)
+                self._action_btn.configure(text="✕  CLOSE", bg=BG_BUTTON, fg=TEXT_PRIMARY)
+        except tk.TclError:
+            pass
+
+    def _on_action(self):
+        if self._running and self._process and self._process.poll() is None:
+            self._process.terminate()
+            self._running = False
+            self._status_label.configure(text="Stopped", fg=ACCENT_RED)
+            self._action_btn.configure(text="✕  CLOSE", bg=BG_BUTTON, fg=TEXT_PRIMARY)
+        else:
+            self.destroy()
+
+    def _on_close(self):
+        if self._process and self._process.poll() is None:
+            self._process.terminate()
+        self.destroy()
+
 
 # ──────────────────────────────────────────────────
 # Launcher actions
@@ -1271,9 +1934,13 @@ def run_training(root):
     TrainingDashboard(root)
 
 
-def run_exam():
-    print("Running exam (current model)...")
-    subprocess.Popen([sys.executable, TRAIN_AI, "--watch", "--games", "10"], cwd=DIR)
+def run_exam(root, num_games=10, model_name=None):
+    label = model_name if model_name and model_name != "(default)" else "current"
+    print(f"Running exam ({label} model, {num_games} games)...")
+    cmd = [sys.executable, "-u", TRAIN_AI, "--watch", "--games", str(num_games)]
+    if model_name and model_name != "(default)":
+        cmd.extend(["--run-name", model_name])
+    WatchResultsDialog(root, cmd, f"{label} model — {num_games} games")
 
 
 def run_algo():
@@ -1281,9 +1948,10 @@ def run_algo():
     subprocess.Popen([sys.executable, TEACHER], cwd=DIR)
 
 
-def run_pretrained():
-    print("Running pretrained model...")
-    subprocess.Popen([sys.executable, TRAIN_AI, "--watch", "--pretrained", "--games", "10"], cwd=DIR)
+def run_pretrained(root, num_games=10):
+    print(f"Running pretrained model ({num_games} games)...")
+    cmd = [sys.executable, "-u", TRAIN_AI, "--watch", "--pretrained", "--games", str(num_games)]
+    WatchResultsDialog(root, cmd, f"pretrained.pth — {num_games} games")
 
 
 def run_manual():
@@ -1309,7 +1977,26 @@ def view_stats():
         messagebox.showerror("Error", f"Could not open file: {e}")
 
 
+def open_model_folder():
+    """Open the model/ directory in the file manager."""
+    model_dir = os.path.join(DIR, "model")
+    if not os.path.exists(model_dir):
+        os.makedirs(model_dir, exist_ok=True)
+    try:
+        if sys.platform == "darwin":
+            subprocess.run(["open", model_dir])
+        elif sys.platform == "win32":
+            os.startfile(model_dir)
+        else:
+            subprocess.run(["xdg-open", model_dir])
+    except Exception as e:
+        messagebox.showerror("Error", f"Could not open folder: {e}")
+
+
 def stop_all_and_exit(root):
+    if not messagebox.askyesno("Exit", "Stop all running Snake AI processes and exit?",
+                                parent=root):
+        return
     print("Stopping processes and exiting...")
     try:
         if sys.platform == "win32":
@@ -1328,17 +2015,19 @@ def stop_all_and_exit(root):
 # Premium UI Widgets
 # ──────────────────────────────────────────────────
 class PremiumButton(tk.Canvas):
-    """A premium dark button with hover effects, optional colored dot, and chevron."""
+    """A premium dark button with hover effects, optional colored dot, subtitle, and chevron."""
 
     def __init__(self, parent, text, command, dot_color=None, icon=None,
-                 show_chevron=True, accent=False, **kwargs):
-        super().__init__(parent, highlightthickness=0, bg=BG_DARK, height=48, **kwargs)
+                 show_chevron=True, accent=False, subtitle=None, **kwargs):
+        height = 48 if not subtitle else 58
+        super().__init__(parent, highlightthickness=0, bg=BG_DARK, height=height, **kwargs)
         self.command = command
         self._text = text
         self._dot_color = dot_color
         self._icon = icon
         self._show_chevron = show_chevron
         self._accent = accent
+        self._subtitle = subtitle
         self._hovered = False
 
         self.bind("<Configure>", self._draw)
@@ -1366,23 +2055,30 @@ class PremiumButton(tk.Canvas):
         self._round_rect(2, 2, w - 2, h - 2, r, fill=bg, outline=border)
 
         x_offset = 18
+        text_y = h // 2 if not self._subtitle else h // 2 - 6
 
         # Icon (emoji)
         if self._icon:
-            self.create_text(x_offset, h // 2, text=self._icon,
+            self.create_text(x_offset, text_y, text=self._icon,
                              font=("", 14), fill=fg, anchor=tk.W)
             x_offset += 28
 
         # Colored dot
         if self._dot_color:
             dot_r = 5
-            self.create_oval(x_offset, h // 2 - dot_r, x_offset + dot_r * 2,
-                             h // 2 + dot_r, fill=self._dot_color, outline="")
+            self.create_oval(x_offset, text_y - dot_r, x_offset + dot_r * 2,
+                             text_y + dot_r, fill=self._dot_color, outline="")
             x_offset += 20
 
         # Text
-        self.create_text(x_offset, h // 2, text=self._text,
+        self.create_text(x_offset, text_y, text=self._text,
                          font=("Helvetica Neue", 13), fill=fg, anchor=tk.W)
+
+        # Subtitle
+        if self._subtitle:
+            sub_fg = TEXT_MUTED if not self._accent else "#005530"
+            self.create_text(x_offset, text_y + 18, text=self._subtitle,
+                             font=("Helvetica Neue", 9), fill=sub_fg, anchor=tk.W)
 
         # Chevron
         if self._show_chevron and not self._accent:
@@ -1479,6 +2175,8 @@ def main():
     root.configure(bg=BG_DARK)
     root.resizable(False, False)
 
+    toast = ToastNotification(root)
+
     # ── Main container ──
     container = tk.Frame(root, bg=BG_DARK, padx=24, pady=20)
     container.pack(fill=tk.BOTH, expand=True)
@@ -1508,78 +2206,174 @@ def main():
     tk.Label(container, text="TRAINING", font=("Helvetica Neue", 10, "bold"),
              bg=BG_DARK, fg=TEXT_MUTED).pack(anchor=tk.W, pady=(0, 6))
 
-    PremiumButton(container, "Start / Continue Training",
+    btn_train = PremiumButton(container, "Start / Continue Training",
                   lambda: run_training(root),
-                  icon="▶", accent=True, show_chevron=False
-                  ).pack(fill=tk.X, pady=(0, 6))
+                  icon="▶", accent=True, show_chevron=False,
+                  subtitle="Open dashboard with real-time stats and learning curve"
+                  )
+    btn_train.pack(fill=tk.X, pady=(0, 6))
+    Tooltip(btn_train, "Open training dashboard with live stats,\ntraining log, and learning curve chart.")
 
-    PremiumButton(container, "New Sweep Run",
+    btn_sweep = PremiumButton(container, "New Sweep Run",
                   lambda: SweepRunDashboard(root),
-                  icon="⚡", accent=False, show_chevron=False
-                  ).pack(fill=tk.X, pady=(0, 12))
+                  icon="⚡", accent=False, show_chevron=False,
+                  subtitle="Train with custom LR, DAgger, Curriculum parameters"
+                  )
+    btn_sweep.pack(fill=tk.X, pady=(0, 12))
+    Tooltip(btn_sweep, "Start training with custom hyperparameters.\nResults saved to a separate model folder.")
 
     # ── WATCH section ──
     tk.Label(container, text="WATCH", font=("Helvetica Neue", 10, "bold"),
              bg=BG_DARK, fg=TEXT_MUTED).pack(anchor=tk.W, pady=(4, 6))
 
-    PremiumButton(container, "Perfect Algorithm",
-                  run_algo, dot_color=ACCENT_GREEN,
-                  ).pack(fill=tk.X, pady=2)
+    # Model selector row
+    model_row = tk.Frame(container, bg=BG_DARK)
+    model_row.pack(fill=tk.X, pady=(0, 8))
 
-    # "Teacher" subtitle
-    teacher_hint = tk.Label(container, text="", bg=BG_DARK)
-    teacher_hint.pack()
+    tk.Label(model_row, text="Model:", font=("Helvetica Neue", 10),
+             bg=BG_DARK, fg=TEXT_SECONDARY).pack(side=tk.LEFT, padx=(0, 6))
 
-    PremiumButton(container, "Test Current Model",
-                  run_exam, dot_color=ACCENT_BLUE,
-                  ).pack(fill=tk.X, pady=2)
+    root.option_add('*TCombobox*Listbox.background', BG_CARD)
+    root.option_add('*TCombobox*Listbox.foreground', TEXT_PRIMARY)
+    root.option_add('*TCombobox*Listbox.selectBackground', BG_BUTTON_HOVER)
+    root.option_add('*TCombobox*Listbox.selectForeground', ACCENT_GREEN)
 
-    PremiumButton(container, "Pretrained Model",
-                  run_pretrained, dot_color=ACCENT_PURPLE,
-                  ).pack(fill=tk.X, pady=2)
+    combo_style = ttk.Style(root)
+    combo_style.theme_use('clam')
+    combo_style.configure("Dark.TCombobox",
+                           fieldbackground=BG_CARD, background=BG_CARD,
+                           foreground=TEXT_PRIMARY, arrowcolor=TEXT_PRIMARY,
+                           bordercolor=BORDER_COLOR, borderwidth=1)
+    combo_style.map("Dark.TCombobox",
+                     fieldbackground=[('readonly', BG_CARD)],
+                     background=[('active', BG_BUTTON_HOVER)])
 
-    PremiumButton(container, "Play Manually",
-                  run_manual, dot_color=ACCENT_ORANGE,
-                  ).pack(fill=tk.X, pady=(2, 12))
+    exam_model_var = tk.StringVar(value="(default)")
+    exam_model_combo = ttk.Combobox(model_row, textvariable=exam_model_var,
+                                     values=find_model_names(),
+                                     style="Dark.TCombobox", state="readonly",
+                                     font=("SF Mono", 11), width=22)
+    exam_model_combo.pack(side=tk.LEFT)
+    Tooltip(exam_model_combo, "Model folder for 'Test Current Model'.\n(default) = model/checkpoint_best.pth")
 
-    # Hint text for manual play
-    tk.Label(container, text="WASD / Arrows", font=("Helvetica Neue", 9),
-             bg=BG_DARK, fg=TEXT_MUTED).pack(anchor=tk.E, pady=(0, 4))
+    def _get_exam_model():
+        return exam_model_var.get().strip() or "(default)"
 
-    # ── BENCHMARK section ──
-    tk.Label(container, text="BENCHMARK", font=("Helvetica Neue", 10, "bold"),
+    # Watch controls row
+    watch_controls = tk.Frame(container, bg=BG_DARK)
+    watch_controls.pack(fill=tk.X, pady=(0, 8))
+
+    # Games spinner
+    games_frame = tk.Frame(watch_controls, bg=BG_DARK)
+    games_frame.pack(side=tk.LEFT)
+
+    tk.Label(games_frame, text="Games:", font=("Helvetica Neue", 10),
+             bg=BG_DARK, fg=TEXT_SECONDARY).pack(side=tk.LEFT, padx=(0, 6))
+
+    games_var = tk.StringVar(value="10")
+    games_spinner = tk.Spinbox(games_frame, from_=1, to=100, textvariable=games_var,
+                                width=4, bg=BG_CARD, fg=TEXT_PRIMARY, buttonbackground=BG_BUTTON,
+                                insertbackground=ACCENT_GREEN, font=("SF Mono", 11),
+                                relief=tk.FLAT, highlightbackground=BORDER_COLOR,
+                                highlightthickness=1)
+    games_spinner.pack(side=tk.LEFT)
+    Tooltip(games_spinner, "Number of games to play in Watch mode.\nApplies to Test Current and Pretrained.")
+
+
+
+    def _get_watch_games():
+        try:
+            return int(games_var.get())
+        except ValueError:
+            return 10
+
+    btn_algo = PremiumButton(container, "Perfect Algorithm",
+                  lambda: [run_algo(), toast.show("Perfect Algorithm started")],
+                  dot_color=ACCENT_GREEN,
+                  subtitle="Hamiltonian cycle teacher — always reaches max score"
+                  )
+    btn_algo.pack(fill=tk.X, pady=2)
+    Tooltip(btn_algo, "Watch the Hamiltonian cycle algorithm play.\nIt always wins (fills the entire board).")
+
+    btn_test = PremiumButton(container, "Test Current Model",
+                  lambda: [run_exam(root, _get_watch_games(), _get_exam_model()),
+                           toast.show(f"Testing {_get_exam_model()} — {_get_watch_games()} games")],
+                  dot_color=ACCENT_BLUE,
+                  subtitle="Watch the selected model's checkpoint_best.pth"
+                  )
+    btn_test.pack(fill=tk.X, pady=2)
+    Tooltip(btn_test, "Watch the selected model's checkpoint_best.pth\nplay the selected number of games.")
+
+    btn_pre = PremiumButton(container, "Pretrained Model",
+                  lambda: [run_pretrained(root, _get_watch_games()),
+                           toast.show(f"Pretrained model — {_get_watch_games()} games")],
+                  dot_color=ACCENT_PURPLE,
+                  subtitle="Watch the included pretrained.pth demo model"
+                  )
+    btn_pre.pack(fill=tk.X, pady=2)
+    Tooltip(btn_pre, "Watch the included pretrained model play.\nUseful as a reference for your own training.")
+
+    btn_manual = PremiumButton(container, "Play Manually",
+                  lambda: [run_manual(), toast.show("Manual play started — WASD / Arrows")],
+                  dot_color=ACCENT_ORANGE,
+                  subtitle="Play Snake yourself — WASD or Arrow keys, ESC to quit"
+                  )
+    btn_manual.pack(fill=tk.X, pady=(2, 12))
+    Tooltip(btn_manual, "Play Snake yourself using WASD or Arrow keys.\nESC to quit, +/- to adjust speed.")
+
+    # ── TOOLS section ──
+    tk.Label(container, text="TOOLS", font=("Helvetica Neue", 10, "bold"),
              bg=BG_DARK, fg=TEXT_MUTED).pack(anchor=tk.W, pady=(4, 6))
 
-    PremiumButton(container, "Benchmark Models",
+    btn_benchmark = PremiumButton(container, "Benchmark Models",
                   lambda: BenchmarkDashboard(root),
-                  icon="📊", accent=False, show_chevron=False, dot_color=ACCENT_ORANGE
-                  ).pack(fill=tk.X, pady=(0, 12))
+                  icon="📊", accent=False, show_chevron=False, dot_color=ACCENT_ORANGE,
+                  subtitle="Run N games on checkpoints, compare stats, export CSV"
+                  )
+    btn_benchmark.pack(fill=tk.X, pady=2)
+    Tooltip(btn_benchmark, "Benchmark one or more checkpoints.\nCompare stats, view distributions, export CSV.")
+
+    btn_record = PremiumButton(container, "Record GIF Demo",
+                  lambda: RecordDemoDialog(root),
+                  icon="📹", accent=False, show_chevron=False, dot_color=ACCENT_PURPLE,
+                  subtitle="Generate animated GIF of AI gameplay for sharing"
+                  )
+    btn_record.pack(fill=tk.X, pady=(2, 12))
+    Tooltip(btn_record, "Record an animated GIF of the AI playing.\nChoose pretrained, untrained, or both.")
 
     # ── OTHER section ──
     tk.Label(container, text="OTHER", font=("Helvetica Neue", 10, "bold"),
              bg=BG_DARK, fg=TEXT_MUTED).pack(anchor=tk.W, pady=(4, 6))
 
-    # Bottom buttons row
+    # Bottom buttons row — 3 columns
     bottom_row = tk.Frame(container, bg=BG_DARK)
     bottom_row.pack(fill=tk.X, pady=(0, 8))
     bottom_row.columnconfigure(0, weight=1)
     bottom_row.columnconfigure(1, weight=1)
+    bottom_row.columnconfigure(2, weight=1)
 
-    stats_btn = BottomButton(bottom_row, "View Statistics", view_stats, color=ACCENT_CYAN)
+    stats_btn = BottomButton(bottom_row, "📈 Statistics", view_stats, color=ACCENT_CYAN)
     stats_btn.grid(row=0, column=0, sticky="ew", padx=(0, 4))
+    Tooltip(stats_btn, "Open learning_curve.png in your\ndefault image viewer.")
 
-    exit_btn = BottomButton(bottom_row, "Exit", lambda: stop_all_and_exit(root), color=ACCENT_RED)
-    exit_btn.grid(row=0, column=1, sticky="ew", padx=(4, 0))
+    folder_btn = BottomButton(bottom_row, "📂 Models", open_model_folder, color=ACCENT_BLUE)
+    folder_btn.grid(row=0, column=1, sticky="ew", padx=4)
+    Tooltip(folder_btn, "Open the model/ directory\nin your file manager.")
+
+    exit_btn = BottomButton(bottom_row, "⏻ Exit", lambda: stop_all_and_exit(root), color=ACCENT_RED)
+    exit_btn.grid(row=0, column=2, sticky="ew", padx=(4, 0))
+    Tooltip(exit_btn, "Stop all running Snake AI processes\nand close the launcher.")
 
     # ── Footer ──
     tk.Label(container,
-             text="Windows open in separate processes.\nClosing this panel will not stop games.",
+             text="Snake AI · Neural Network Controller\n"
+                  "Game windows open separately · Press ESC in game to quit",
              font=("Helvetica Neue", 10), bg=BG_DARK, fg=TEXT_MUTED,
              justify=tk.CENTER).pack(pady=(12, 0))
 
     # ── Size and center window ──
     root.update_idletasks()
-    width = 420
+    width = 460
     height = root.winfo_reqheight()
     x = (root.winfo_screenwidth() - width) // 2
     y = (root.winfo_screenheight() - height) // 2

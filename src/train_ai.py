@@ -292,19 +292,61 @@ class Agent:
         return checkpoint
 
 
-def evaluate(agent, game, num_games):
-    """Honest evaluation: network only (greedy + safe_moves), no teacher.
-    Uses plain reset() — the target conditions."""
-    scores = []
-    for _ in range(num_games):
-        game.reset()
-        done = False
-        while not done:
+def play_game(agent, game, unstick=False):
+    """Run one episode with the network's policy (greedy + safe_moves).
+
+    If unstick, fall back to the teacher's action whenever the snake repeats a
+    (head, direction) it has already visited since the last apple — late-game,
+    the network sometimes settles into a closed loop over a subset of the board
+    that never passes through the apple's cell, and would otherwise just run out
+    the clock (frame_iteration > 100 * len(snake)). The teacher's route follows
+    HAMILTONIAN_CYCLE, which almost never matches the network's self-formed loop,
+    so it diverges — and heads toward the apple — within one lap.
+    """
+    done = False
+    visited = set()
+    score = 0
+    while not done:
+        key = (game.head, game.direction)
+        if unstick and key in visited:
+            action = get_best_move(game)
+        else:
             state = agent.get_state(game)
             action = agent.get_network_action(state, game)
-            done, score = game.play_step(action)
-        scores.append(score)
-    return sum(scores) / len(scores), max(scores)
+        if unstick:
+            visited.add(key)
+        done, score = game.play_step(action)
+        if game.frame_iteration == 0:
+            visited.clear()
+    return score
+
+
+def game_outcome(game):
+    """Classify how a finished episode ended, from the final game state:
+    'collision' (hit wall/self), 'win' (snake filled the board), or 'stuck'
+    (neither — i.e. the frame-timeout fired because the network looped over a
+    subset of the board without reaching the apple). 'stuck' is the failure mode
+    the unstick crutch targets, and is reported as the stuck-rate metric."""
+    if game.is_collision():
+        return 'collision'
+    if len(game.snake) >= game.grid_cells:
+        return 'win'
+    return 'stuck'
+
+
+def evaluate(agent, game, num_games):
+    """Honest evaluation: network only (greedy + safe_moves), no teacher.
+    Uses plain reset() — the target conditions. Also counts how many games ended
+    'stuck' (loop-timeout) — the metric that tracks progress toward not needing the
+    unstick crutch. The score itself stays honest (no unstick during eval)."""
+    scores = []
+    stuck = 0
+    for _ in range(num_games):
+        game.reset()
+        scores.append(play_game(agent, game))
+        if game_outcome(game) == 'stuck':
+            stuck += 1
+    return sum(scores) / len(scores), max(scores), stuck
 
 
 def train(headless=False):
@@ -385,12 +427,12 @@ def train(headless=False):
                   flush=True)
 
             if agent.n_games % EVAL_EVERY_N_GAMES == 0:
-                avg_eval, max_eval = evaluate(agent, game, EVAL_GAMES)
+                avg_eval, max_eval, stuck = evaluate(agent, game, EVAL_GAMES)
                 agent.eval_games_history.append(agent.n_games)
                 agent.eval_avg_history.append(avg_eval)
                 agent.eval_max_history.append(max_eval)
-                print(f'  >> Honest eval: avg={avg_eval:.1f}, max={max_eval} '
-                      f'({EVAL_GAMES} games)', flush=True)
+                print(f'  >> Honest eval: avg={avg_eval:.1f}, max={max_eval}, '
+                      f'stuck={stuck}/{EVAL_GAMES} ({EVAL_GAMES} games)', flush=True)
 
                 if avg_eval > agent.best_eval_score:
                     agent.best_eval_score = avg_eval
@@ -425,7 +467,7 @@ def train(headless=False):
             game.reset(start_length=start_length)
 
 
-def watch(num_games=10, pretrained=False):
+def watch(num_games=10, pretrained=False, unstick=True):
     agent = Agent()
     checkpoint_name = 'pretrained.pth' if pretrained else 'checkpoint_best.pth'
     checkpoint = agent.load_checkpoint(checkpoint_name)
@@ -437,6 +479,8 @@ def watch(num_games=10, pretrained=False):
         info = f"games trained: {agent.n_games}"
         if eval_score is not None:
             info += f", honest eval at save: {eval_score:.1f}"
+        if agent.mean_loss_history:
+            info += f", loss at save: {agent.mean_loss_history[-1]:.4f}"
         print(f"Loaded {checkpoint_name} ({info})")
 
     game = SnakeGameAI(w=640, h=640, num_apples=NUM_APPLES)
@@ -445,12 +489,7 @@ def watch(num_games=10, pretrained=False):
     scores = []
     for i in range(num_games):
         game.reset()
-        done = False
-        while not done:
-            state = agent.get_state(game)
-            action = agent.get_network_action(state, game)
-            done, score = game.play_step(action)
-
+        score = play_game(agent, game, unstick=unstick)
         scores.append(score)
         print(f'Game {i + 1}/{num_games} | Score: {score}')
 
@@ -463,6 +502,9 @@ if __name__ == '__main__':
     parser.add_argument('--games', type=int, default=10, help='Number of games to watch (default 10)')
     parser.add_argument('--pretrained', action='store_true',
                          help='For --watch: load pretrained model (model/pretrained.pth)')
+    parser.add_argument('--no-unstick', action='store_true',
+                         help='For --watch: disable the teacher-assisted loop-breaking '
+                              'fallback (pure network policy)')
     parser.add_argument('--headless', action='store_true',
                          help='Train without a game window (for use by launcher dashboard)')
     parser.add_argument('--lr', type=float, default=None,
@@ -488,6 +530,6 @@ if __name__ == '__main__':
         MODEL_FOLDER = os.path.join('./model', args.run_name)
 
     if args.watch:
-        watch(num_games=args.games, pretrained=args.pretrained)
+        watch(num_games=args.games, pretrained=args.pretrained, unstick=not args.no_unstick)
     else:
         train(headless=args.headless)
