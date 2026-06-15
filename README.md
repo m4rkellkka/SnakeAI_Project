@@ -18,9 +18,15 @@ This project trains a neural network to play Snake by learning from a rule-based
 
 **Key results:**
 
-- **Best honest evaluation score: 182.2 / 253** (72% of max possible)
+- **Best honest evaluation score: 234.9 / 253** (93% of max possible)
 - **Perfect teacher baseline:** 253/253 consistently
-- Trained with ~275 games using 300k+ steps of DAgger-lite sampling
+- Trained with ~350 games using 2.5M+ steps of DAgger-lite sampling
+
+### Demo
+
+| Trained model (`pretrained.pth`) | Untrained (random init) |
+|:---:|:---:|
+| <img src="assets/demo_pretrained.gif" width="320"> | <img src="assets/demo_untrained.gif" width="320"> |
 
 ### Features
 
@@ -89,11 +95,24 @@ Relative to current heading: `[straight, turn right, turn left]` (not absolute d
 
 **Training Progression:**
 
-- Games 1–25: Honest eval score climbs from ~30 to ~60
-- Games 25–150: Score stabilizes ~110–140, with some variance
-- Games 150–275: Score improves to **182.2**, reaching **253/253** in several eval runs
+- Games 1–150: Honest eval score climbs unevenly from ~34 to ~134, with a dip to ~48 around game 125
+- Games 150–350: Continued (volatile) improvement, peaking at **234.9 / 253** (93%) at game 350
+- Games 350–450: Oscillates in the ~185–216 range — late-game "spinning" on a subset of boards
+  caps the honest score short of a perfect 253; see `checkpoint_best.pth` vs. `checkpoint_last.pth`
+  in the codebase notes for why the peak checkpoint, not the final one, ships as `pretrained.pth`
 
 **Learning Curve:** [assets/learning_curve.png](assets/learning_curve.png)
+
+**Benchmark (100 games, seed 42, `pretrained.pth`):**
+
+| Mode | Mean | Median | Std | Min | Max | Win rate (253/253) | Stuck rate |
+|------|------|--------|-----|-----|-----|---------------------|------------|
+| With unstick (default) | 226.0 | 253.0 | 56.9 | 45 | 253 | 81% | 0% |
+| Without unstick (`--no-unstick`, raw network) | 206.0 | 253.0 | 70.4 | 36 | 253 | 67% | 13% |
+
+The "unstick" crutch detects when the network repeats a `(head, direction)` loop and hands
+that one step to the teacher — it removes nearly all loop-timeouts (13% → 0% stuck) and lifts
+the mean score by ~20 points. Run it yourself with `tools/benchmark.py` (see [Usage](#usage)).
 
 ### Installation
 
@@ -259,7 +278,7 @@ Planned next steps, grouped by track. Tracks aren't strictly sequential — some
 
 - Run sweeps over `DAGGER_PROB_MAX` (0.7), `CURRICULUM_PROB`, `LR` using `--run-name` + `tools/benchmark.py`, and compare results
 - `SnakeNet` architecture experiments — residual blocks, deeper conv stack, alternative FC sizes
-- Longer training runs beyond the current 275-game checkpoint
+- Longer training runs beyond the current 350-game checkpoint
 
 #### Track B — New training paradigms
 
@@ -277,7 +296,6 @@ Planned next steps, grouped by track. Tracks aren't strictly sequential — some
 
 #### Presentation polish
 
-- Animated GIF of the trained agent playing, at the very top of the README (use the existing `tools/record_demo.py`)
 - Status badges (Python version, license, framework)
 - Table of contents for easier navigation
 - Mermaid diagram of the training pipeline (env → teacher/DAgger → trainer → checkpoint → eval)
