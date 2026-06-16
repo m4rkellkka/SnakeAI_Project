@@ -102,7 +102,7 @@ class SnakeNet(nn.Module):
 
     def __init__(self, output_size=3):
         super().__init__()
-        self.conv1 = nn.Conv2d(9, 16, kernel_size=3, stride=1, padding=1)
+        self.conv1 = nn.Conv2d(10, 16, kernel_size=3, stride=1, padding=1)
         self.conv2 = nn.Conv2d(16, 32, kernel_size=3, stride=1, padding=1)
         self.conv3 = nn.Conv2d(32, 32, kernel_size=3, stride=1, padding=1)
         self.fc1 = nn.Linear(32 * GRID_SIZE * GRID_SIZE, 128)
@@ -186,7 +186,7 @@ class Agent:
         self.score_history = []
 
     def get_state(self, game):
-        state = np.zeros((9, GRID_SIZE, GRID_SIZE), dtype=np.float32)
+        state = np.zeros((10, GRID_SIZE, GRID_SIZE), dtype=np.float32)
 
         # Channels 0–4: head, body, food, danger, fullness (before rotation, absolute coords)
 
@@ -217,21 +217,28 @@ class Agent:
         # Channel 4: board fullness
         state[4, :, :] = len(game.snake) / (GRID_SIZE ** 2)
 
-        # Channels 5–8: absolute direction (one-hot, not rotated!)
+        # Channel 5: cells visited since last food (egocentric — rotated with 0–4).
+        # Gives the network direct information about its recent path, letting it
+        # detect and avoid loops without inference-time crutches.
+        for (vx, vy) in game.visited_since_food:
+            state[5, vy, vx] = 1.0
+
+        # Channels 6–9: absolute direction (one-hot, not rotated!)
         # Compass fix: direction is encoded separately (absolute, not egocentric).
         # This lets the network distinguish cycle turns that depend on absolute
         # position (even/odd columns in the serpentine grid), not just local patterns.
         dir_idx = [Direction.UP, Direction.LEFT, Direction.DOWN, Direction.RIGHT].index(game.direction)
-        state[5 + dir_idx, :, :] = 1.0
+        state[6 + dir_idx, :, :] = 1.0
 
-        # Egocentric view ONLY for channels 0–4: rotate so head faces "up".
-        # Channels 5–8 (direction) remain in absolute coordinates.
+        # Egocentric view for channels 0–5: rotate so head faces "up".
+        # Channel 5 (visited) is positional, so it rotates with the egocentric block.
+        # Channels 6–9 (direction) remain in absolute coordinates.
         if game.direction == Direction.RIGHT:
-            state[:5] = np.rot90(state[:5], k=1, axes=(1, 2))
+            state[:6] = np.rot90(state[:6], k=1, axes=(1, 2))
         elif game.direction == Direction.DOWN:
-            state[:5] = np.rot90(state[:5], k=2, axes=(1, 2))
+            state[:6] = np.rot90(state[:6], k=2, axes=(1, 2))
         elif game.direction == Direction.LEFT:
-            state[:5] = np.rot90(state[:5], k=3, axes=(1, 2))
+            state[:6] = np.rot90(state[:6], k=3, axes=(1, 2))
 
         # rot90 returns a view with negative strides — copy it for PyTorch compatibility.
         return state.copy()
@@ -384,6 +391,7 @@ def train(headless=False, load_checkpoint='checkpoint_last.pth'):
     game_batches = 0
     episode_dagger = False
     current_is_curriculum = False
+    dagger_visited = set()  # (head Point, Direction) since last food — prevents buffer flooding on loops
 
     if headless:
         print("Training started (headless mode — no game window).", flush=True)
@@ -395,8 +403,13 @@ def train(headless=False, load_checkpoint='checkpoint_last.pth'):
         teacher_action = get_best_move(game)
 
         if random.random() < dagger_prob(agent.total_steps):
-            action = agent.get_network_action(state_old, game)
             episode_dagger = True
+            dagger_key = (game.head, game.direction)
+            if dagger_key in dagger_visited:
+                action = teacher_action  # loop detected — teacher breaks it, label unchanged
+            else:
+                dagger_visited.add(dagger_key)
+                action = agent.get_network_action(state_old, game)
         else:
             action = teacher_action
 
@@ -405,6 +418,10 @@ def train(headless=False, load_checkpoint='checkpoint_last.pth'):
         agent.memory.push(state_old, teacher_action)
 
         done, score = game.play_step(action)
+
+        # frame_iteration resets to 0 inside play_step when food is eaten
+        if game.frame_iteration == 0 and not done:
+            dagger_visited.clear()
 
         agent.total_steps += 1
         if agent.total_steps % TRAIN_EVERY_N_STEPS == 0 and len(agent.memory) >= BATCH_SIZE:
@@ -466,6 +483,7 @@ def train(headless=False, load_checkpoint='checkpoint_last.pth'):
                      agent.loss_history, agent.mean_loss_history, output_path=learning_curve_path)
 
             episode_dagger = False
+            dagger_visited.clear()
             current_is_curriculum = (
                 agent.n_games > CURRICULUM_START_GAMES and random.random() < CURRICULUM_PROB
             )
