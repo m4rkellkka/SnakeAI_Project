@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 import os
+import sys
 import argparse
 import random
 import numpy as np
@@ -182,6 +183,7 @@ class Agent:
         self.eval_max_history = []
         self.loss_history = []
         self.mean_loss_history = []
+        self.score_history = []
 
     def get_state(self, game):
         state = np.zeros((9, GRID_SIZE, GRID_SIZE), dtype=np.float32)
@@ -285,6 +287,7 @@ class Agent:
         self.eval_max_history = checkpoint.get('eval_max_history', [])
         self.loss_history = checkpoint.get('loss_history', [])
         self.mean_loss_history = checkpoint.get('mean_loss_history', [])
+        self.score_history = checkpoint.get('score_history', [])
 
         if load_optimizer and 'optimizer_state_dict' in checkpoint:
             self.trainer.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
@@ -349,12 +352,15 @@ def evaluate(agent, game, num_games):
     return sum(scores) / len(scores), max(scores), stuck
 
 
-def train(headless=False):
+def train(headless=False, load_checkpoint='checkpoint_last.pth'):
     agent = Agent()
     game = SnakeGameAI(w=640, h=640, num_apples=NUM_APPLES, headless=headless)
     game.speed = 0  # Uncapped FPS — rendering is throttled in snake_game.py
 
-    loaded = agent.load_checkpoint('checkpoint_last.pth', load_optimizer=True)
+    loaded = False
+    if load_checkpoint:
+        loaded = agent.load_checkpoint(load_checkpoint, load_optimizer=True)
+    
     if loaded:
         print(f"Resuming: games={agent.n_games}, steps={agent.total_steps}, "
               f"best honest eval={agent.best_eval_score:.1f}", flush=True)
@@ -408,6 +414,7 @@ def train(headless=False):
 
         if done:
             agent.n_games += 1
+            agent.score_history.append(score)
 
             avg_loss = game_loss / game_batches if game_batches > 0 else 0.0
             agent.loss_history.append(avg_loss)
@@ -450,6 +457,7 @@ def train(headless=False):
                     eval_max_history=agent.eval_max_history,
                     loss_history=agent.loss_history,
                     mean_loss_history=agent.mean_loss_history,
+                    score_history=agent.score_history[-1000:], # keep only last 1000 to save space
                     run_config=run_config,
                 )
 
@@ -467,9 +475,12 @@ def train(headless=False):
             game.reset(start_length=start_length)
 
 
-def watch(num_games=10, pretrained=False, unstick=True):
+def watch(num_games=10, pretrained=False, unstick=True, checkpoint_name=None):
     agent = Agent()
-    checkpoint_name = 'pretrained.pth' if pretrained else 'checkpoint_best.pth'
+    if pretrained:
+        checkpoint_name = 'pretrained.pth'
+    elif not checkpoint_name:
+        checkpoint_name = 'checkpoint_best.pth'
     checkpoint = agent.load_checkpoint(checkpoint_name)
 
     if checkpoint is None:
@@ -502,11 +513,17 @@ if __name__ == '__main__':
     parser.add_argument('--games', type=int, default=10, help='Number of games to watch (default 10)')
     parser.add_argument('--pretrained', action='store_true',
                          help='For --watch: load pretrained model (model/pretrained.pth)')
+    parser.add_argument('--checkpoint', type=str, default=None,
+                         help='For --watch: load a specific checkpoint file (e.g. checkpoint_last.pth)')
     parser.add_argument('--no-unstick', action='store_true',
                          help='For --watch: disable the teacher-assisted loop-breaking '
                               'fallback (pure network policy)')
     parser.add_argument('--headless', action='store_true',
                          help='Train without a game window (for use by launcher dashboard)')
+    parser.add_argument('--init-only', action='store_true',
+                         help='Initialize a new model with specified parameters and exit without training')
+    parser.add_argument('--load-checkpoint', type=str, default='checkpoint_last.pth',
+                         help='For training: load a specific checkpoint to resume from. Default: checkpoint_last.pth. Use "none" or "" to train from scratch.')
     parser.add_argument('--lr', type=float, default=None,
                          help='Override learning rate (default: module LR=0.0005)')
     parser.add_argument('--dagger-prob-max', type=float, default=None,
@@ -529,7 +546,17 @@ if __name__ == '__main__':
     if args.run_name is not None:
         MODEL_FOLDER = os.path.join('./model', args.run_name)
 
+    if args.init_only:
+        agent = Agent()
+        run_config = {'lr': LR, 'dagger_prob_max': DAGGER_PROB_MAX, 'curriculum_prob': CURRICULUM_PROB}
+        agent.save_checkpoint('checkpoint_last.pth', run_config=run_config)
+        agent.save_checkpoint('checkpoint_best.pth', eval_score=0.0, run_config=run_config)
+        print(f"Initialized new model at {MODEL_FOLDER} with config: {run_config}", flush=True)
+        sys.exit(0)
+
     if args.watch:
-        watch(num_games=args.games, pretrained=args.pretrained, unstick=not args.no_unstick)
+        watch(num_games=args.games, pretrained=args.pretrained, unstick=not args.no_unstick, checkpoint_name=args.checkpoint)
     else:
-        train(headless=args.headless)
+        # Handle the special case where user wants to force train from scratch
+        load_cp = None if args.load_checkpoint.lower() == 'none' or args.load_checkpoint == '' else args.load_checkpoint
+        train(headless=args.headless, load_checkpoint=load_cp)
