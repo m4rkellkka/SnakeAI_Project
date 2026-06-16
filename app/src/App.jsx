@@ -55,12 +55,65 @@ export default function App() {
     return false;
   };
 
-  if (envStatus === null) {
+  const [projectRootInput, setProjectRootInput] = useState("");
+  const [projectRootError, setProjectRootError] = useState("");
+
+  const handleSetProjectRoot = async () => {
+    setProjectRootError("");
+    try {
+      const resolved = await invoke("set_project_root", { path: projectRootInput });
+      setProjectRoot(resolved);
+      checkEnv();
+    } catch (e) {
+      setProjectRootError(String(e));
+    }
+  };
+
+  if (envStatus === null || (projectRoot === "" && envStatus === null)) {
     return (
       <div className="setup-screen">
         <div className="setup-checking">
           <span className="setup-logo-icon">🐍</span>
           <p className="setup-checking-text">Checking environment…</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (projectRoot === "") {
+    return (
+      <div className="setup-screen">
+        <div className="setup-card">
+          <div className="setup-logo">
+            <span className="setup-logo-icon">🐍</span>
+            <div>
+              <h1 className="setup-title">Snake AI</h1>
+              <p className="setup-subtitle">Project folder not found</p>
+            </div>
+          </div>
+          <div className="setup-section">
+            <p className="setup-section-title">Select project folder</p>
+            <p className="setup-section-hint">
+              Paste the path to your <code>SnakeAI_Project</code> folder
+              (the one containing <code>src/train_ai.py</code>).
+            </p>
+            <input
+              className="input"
+              style={{ width: "100%", marginTop: "8px" }}
+              placeholder="/Users/you/Documents/GitHub/SnakeAI_Project"
+              value={projectRootInput}
+              onChange={e => setProjectRootInput(e.target.value)}
+              onKeyDown={e => e.key === "Enter" && handleSetProjectRoot()}
+            />
+            {projectRootError && (
+              <p style={{ color: "#ef4444", fontSize: "13px", marginTop: "8px" }}>{projectRootError}</p>
+            )}
+          </div>
+          <div className="setup-actions">
+            <button className="btn btn--primary" onClick={handleSetProjectRoot} disabled={!projectRootInput}>
+              Set project folder
+            </button>
+          </div>
         </div>
       </div>
     );

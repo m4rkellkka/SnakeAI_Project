@@ -198,13 +198,30 @@ fn kill_pid(pid: u32) {
         .ok();
 }
 
+fn is_valid_project_root(path: &str) -> bool {
+    std::path::Path::new(path).join("src").join("train_ai.py").exists()
+}
+
+fn config_file_path() -> std::path::PathBuf {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+    std::path::Path::new(&home).join(".snake_ai_project_root")
+}
+
 #[tauri::command]
 fn get_project_root() -> String {
+    // 1. Check saved config file
+    if let Ok(saved) = std::fs::read_to_string(config_file_path()) {
+        let saved = saved.trim().to_string();
+        if is_valid_project_root(&saved) {
+            return saved;
+        }
+    }
+
+    // 2. Walk up from cwd
     let cwd = std::env::current_dir().unwrap_or_default();
-    // Walk up until we find src/train_ai.py
     let mut dir = cwd.clone();
     loop {
-        if dir.join("src").join("train_ai.py").exists() {
+        if is_valid_project_root(&dir.to_string_lossy()) {
             return dir.to_string_lossy().to_string();
         }
         match dir.parent() {
@@ -212,7 +229,36 @@ fn get_project_root() -> String {
             None => break,
         }
     }
-    cwd.to_string_lossy().to_string()
+
+    // 3. Try common locations
+    let home = std::env::var("HOME").unwrap_or_default();
+    let candidates = [
+        format!("{}/Documents/GitHub/SnakeAI_Project", home),
+        format!("{}/SnakeAI_Project", home),
+        format!("{}/Desktop/SnakeAI_Project", home),
+        format!("{}/Downloads/SnakeAI_Project", home),
+        format!("{}/Projects/SnakeAI_Project", home),
+    ];
+    for candidate in &candidates {
+        if is_valid_project_root(candidate) {
+            return candidate.clone();
+        }
+    }
+
+    // Not found — return empty string so the UI can ask the user
+    String::new()
+}
+
+#[tauri::command]
+fn set_project_root(path: String) -> Result<String, String> {
+    let path = path.trim().to_string();
+    if !is_valid_project_root(&path) {
+        return Err(
+            "src/train_ai.py not found in that folder. Make sure this is the SnakeAI_Project directory.".to_string()
+        );
+    }
+    std::fs::write(config_file_path(), &path).map_err(|e| e.to_string())?;
+    Ok(path)
 }
 
 #[tauri::command]
@@ -395,6 +441,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             get_project_root,
+            set_project_root,
             start_process,
             stop_process,
             list_processes,
