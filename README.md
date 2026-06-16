@@ -74,7 +74,7 @@ This project trains a neural network to play Snake by learning from a rule-based
 - **Hamiltonian cycle teacher** with corner-cutting shortcuts (provably collision-free)
 - **Full reproducibility** — includes pretrained checkpoint + training logs
 - **Hyperparameter sweeps & benchmarking** — CLI overrides (`--lr`, `--dagger-prob-max`, `--curriculum-prob`, `--run-name`) for isolated, comparable runs, plus `tools/benchmark.py` for head-to-head checkpoint comparison
-- **Tauri desktop app** — self-contained GUI (`app/`) with live training charts, one-click watch/benchmark/sweep panels, and per-process management; no Python install exposed to the user
+- **Tauri desktop app** — self-contained GUI (`app/`) with live training charts, four panels (Train / Watch AI / Benchmark / Models), and per-process management; no Python install exposed to the user
 
 ### UI Gallery (Before & After)
 
@@ -249,7 +249,7 @@ Full-featured dark-theme dashboard with four panels:
 - **Train** — start/stop training with live score + eval charts and a colored log
 - **Watch AI** — one-click buttons for pretrained model, your checkpoint, teacher, or manual play (each opens its own Pygame window)
 - **Benchmark** — run N games with configurable checkpoint/seed/unstick toggle
-- **Sweep Run** — launch headless training with custom LR, DAgger prob, curriculum prob
+- **Models** — list all named runs, view per-run training history charts, create new sweep runs with custom LR / DAgger prob / curriculum prob
 
 Requires: [Node.js](https://nodejs.org) ≥ 18 and [Rust](https://rustup.rs) (for `cargo`/Tauri CLI).
 
@@ -274,7 +274,7 @@ python src/train_ai.py --headless --run-name sweep_lr0.001 \
     --lr 0.001 --dagger-prob-max 0.5 --curriculum-prob 0.3
 ```
 
-Override `LR`, `DAGGER_PROB_MAX`, or `CURRICULUM_PROB` for a single run. `--run-name` isolates checkpoints and `learning_curve.png` under `model/<run-name>/`, so sweeps don't clobber each other or the main run — each checkpoint also stores its `run_config` for traceability. Or use the **New Sweep Run** dashboard in `launcher.py`.
+Override `LR`, `DAGGER_PROB_MAX`, or `CURRICULUM_PROB` for a single run. `--run-name` isolates checkpoints and `learning_curve.png` under `model/<run-name>/`, so sweeps don't clobber each other or the main run — each checkpoint also stores its `run_config` for traceability. Or use the **Models** panel in the Tauri app to create named runs with a GUI.
 
 #### 9. **Benchmark Checkpoints**
 
@@ -357,7 +357,7 @@ Runs N games per checkpoint and reports full score distributions (mean/median/st
 
 The behavioral cloning baseline is feature-complete. Key deliverables shipped:
 
-- ✅ **Tauri desktop app** — dark-theme GUI with live training charts, Watch/Benchmark/Sweep/Models panels, and per-process management
+- ✅ **Tauri desktop app** — dark-theme GUI with live training charts, Train/Watch AI/Benchmark/Models panels, and per-process management
 - ✅ **Documentation** — Table of Contents, Mermaid pipeline diagram, dual-language READMEs
 - ✅ **Hyperparameter sweeps** — named runs, CLI overrides, isolated checkpoints with `run_config` traceability
 - ✅ **Benchmark tooling** — full score distributions, seed-locked head-to-head checkpoint comparison
