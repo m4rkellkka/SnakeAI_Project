@@ -2,9 +2,10 @@ import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
-export default function SetupPanel({ envStatus, onRecheck, projectRoot }) {
+export default function SetupPanel({ envStatus, onRecheck, onInstallComplete, projectRoot }) {
   const [installing, setInstalling] = useState(false);
   const [done, setDone] = useState(false);
+  const [installSuccess, setInstallSuccess] = useState(false);
   const [log, setLog] = useState([]);
   const logRef = useRef(null);
 
@@ -18,10 +19,16 @@ export default function SetupPanel({ envStatus, onRecheck, projectRoot }) {
     const u1 = listen("proc-out:setup-install", (e) => {
       setLog((prev) => [...prev.slice(-199), e.payload]);
     });
-    const u2 = listen("proc-done:setup-install", () => {
+    const u2 = listen("proc-done:setup-install", (e) => {
+      const success = e.payload === true;
       setInstalling(false);
       setDone(true);
-      setTimeout(() => onRecheck(), 800);
+      setInstallSuccess(success);
+      if (success) {
+        setTimeout(() => onInstallComplete(), 500);
+      } else {
+        setTimeout(() => onRecheck(), 800);
+      }
     });
     return () => { u1.then((f) => f()); u2.then((f) => f()); };
   }, [onRecheck]);
@@ -115,13 +122,21 @@ export default function SetupPanel({ envStatus, onRecheck, projectRoot }) {
         )}
 
         <div className="setup-actions">
-          {depsMissing && (
+          {depsMissing && !done && (
             <button
               className="btn btn--primary"
               onClick={installDeps}
               disabled={installing || !projectRoot}
             >
               {installing ? "⏳ Installing…" : "⬇ Install dependencies"}
+            </button>
+          )}
+          {done && (
+            <button
+              className="btn btn--primary"
+              onClick={onInstallComplete}
+            >
+              → Continue to app
             </button>
           )}
           <button

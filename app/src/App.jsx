@@ -71,6 +71,9 @@ export default function App() {
       <SetupPanel
         envStatus={envStatus}
         onRecheck={checkEnv}
+        onInstallComplete={() =>
+          setEnvStatus((prev) => ({ ...prev, deps_ok: true, python_ok: true, missing_packages: [] }))
+        }
         projectRoot={projectRoot}
       />
     );

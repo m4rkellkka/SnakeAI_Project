@@ -41,25 +41,29 @@ fn check_environment() -> EnvCheck {
         };
     }
 
-    // Check all packages in a single subprocess using find_spec —
-    // avoids actually importing torch/CUDA which adds ~3s per call
-    let check_script =
-        "import importlib.util; \
-         pkgs=['torch','pygame','numpy','matplotlib']; \
-         missing=[p for p in pkgs if not importlib.util.find_spec(p)]; \
-         print(','.join(missing),end='')";
-
-    let result = Command::new(&python)
-        .args(["-c", check_script])
+    // Use `pip show` — checks the same package database pip installs into,
+    // more reliable than find_spec which depends on sys.path quirks.
+    let pkgs = ["torch", "pygame", "numpy", "matplotlib"];
+    let show_result = Command::new(&python)
+        .args(
+            std::iter::once("-m")
+                .chain(std::iter::once("pip"))
+                .chain(std::iter::once("show"))
+                .chain(pkgs.iter().copied())
+                .collect::<Vec<_>>(),
+        )
         .output()
         .ok();
 
-    let missing: Vec<String> = match result {
+    let missing: Vec<String> = match show_result {
         Some(out) => {
-            let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            if s.is_empty() { vec![] } else { s.split(',').map(String::from).collect() }
+            let stdout = String::from_utf8_lossy(&out.stdout).to_lowercase();
+            pkgs.iter()
+                .filter(|&&p| !stdout.contains(&format!("name: {}", p)))
+                .map(|&p| p.to_string())
+                .collect()
         }
-        None => vec!["torch".into(), "pygame".into(), "numpy".into(), "matplotlib".into()],
+        None => pkgs.iter().map(|&s| s.to_string()).collect(),
     };
 
     EnvCheck {
@@ -134,12 +138,13 @@ fn install_deps(
     let app_wait = app.clone();
     let id_wait = id.clone();
     std::thread::spawn(move || {
-        let _ = child.wait();
+        let status = child.wait().ok();
+        let success = status.map(|s| s.success()).unwrap_or(false);
         {
             let mut map = registry.lock().unwrap();
             map.remove(&id_wait);
         }
-        let _ = app_wait.emit(&format!("proc-done:{}", id_wait), ());
+        let _ = app_wait.emit(&format!("proc-done:{}", id_wait), success);
     });
 
     Ok(())
@@ -156,6 +161,20 @@ fn open_url(url: String) {
 }
 
 fn find_python() -> String {
+    // Use a login shell so PATH matches the user's terminal (homebrew, pyenv, etc.)
+    let via_shell = Command::new("/bin/zsh")
+        .args(["-l", "-c", "which python3"])
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+
+    if let Some(p) = via_shell {
+        return p;
+    }
+
+    // Fallback: plain which
     Command::new("which")
         .arg("python3")
         .output()
