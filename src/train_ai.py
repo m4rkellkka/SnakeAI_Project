@@ -359,7 +359,7 @@ def evaluate(agent, game, num_games):
     return sum(scores) / len(scores), max(scores), stuck
 
 
-def train(headless=False, load_checkpoint='checkpoint_last.pth'):
+def train(headless=True, load_checkpoint='checkpoint_last.pth'):
     agent = Agent()
     game = SnakeGameAI(w=640, h=640, num_apples=NUM_APPLES, headless=headless)
     game.speed = 0  # Uncapped FPS — rendering is throttled in snake_game.py
@@ -537,7 +537,9 @@ if __name__ == '__main__':
                          help='For --watch: disable the teacher-assisted loop-breaking '
                               'fallback (pure network policy)')
     parser.add_argument('--headless', action='store_true',
-                         help='Train without a game window (for use by launcher dashboard)')
+                         help='No-op (training is headless by default, kept for Tauri/launcher compatibility)')
+    parser.add_argument('--render', action='store_true',
+                         help='Show game window during training (disabled by default for performance)')
     parser.add_argument('--init-only', action='store_true',
                          help='Initialize a new model with specified parameters and exit without training')
     parser.add_argument('--load-checkpoint', type=str, default='checkpoint_last.pth',
@@ -577,4 +579,4 @@ if __name__ == '__main__':
     else:
         # Handle the special case where user wants to force train from scratch
         load_cp = None if args.load_checkpoint.lower() == 'none' or args.load_checkpoint == '' else args.load_checkpoint
-        train(headless=args.headless, load_checkpoint=load_cp)
+        train(headless=not args.render, load_checkpoint=load_cp)
