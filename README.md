@@ -18,7 +18,7 @@
 </p>
 
 <p align="center">
-  <b>Language:</b> <a href="#english">English</a> | <a href="#русский">Русский</a> (<a href="README.ru.md">README.ru.md</a>)
+  <b>Language:</b> <a href="#english">English</a> | <a href="#русский">Русский</a>
 </p>
 
 ---
@@ -289,35 +289,26 @@ Runs N games per checkpoint and reports full score distributions (mean/median/st
 
 ### Roadmap
 
-Planned next steps, grouped by track. Tracks aren't strictly sequential — some have dependencies, noted inline.
+Our planned next steps are grouped into milestones, leading up to our first stable release and beyond.
 
-#### Track A — Model quality (current BC + DAgger pipeline)
+#### 🚀 Version 1.0 (Upcoming First Stable Release)
+Our immediate goal is to finalize the behavioral cloning baseline and polish the presentation before stamping our first official release on GitHub.
+- **Finalize Feature Polish** — Add a few remaining features to the `launcher.py` and benchmark tooling.
+- **Standalone Application** — Create a fully self-contained executable so anyone can run the program out-of-the-box without installing Python.
+- **Documentation & Presentation** — Complete the Mermaid diagram of the training pipeline, add a Table of Contents, and potentially a browser-playable demo (`pygbag`).
 
-- Run sweeps over `DAGGER_PROB_MAX` (0.7), `CURRICULUM_PROB`, `LR` using `--run-name` + `tools/benchmark.py`, and compare results
-- `SnakeNet` architecture experiments — residual blocks, deeper conv stack, alternative FC sizes
-- Longer training runs beyond the current 350-game checkpoint
+#### 🧠 Version 2.0 (New Training Paradigms)
+After releasing v1.0, the focus shifts to entirely new methods of training beyond imitation learning.
+- **Reinforcement Learning (RL)** — Implement DQN/PPO trained from scratch (`src/train_rl.py`), adding a reward wrapper without breaking the existing environment API.
+- **Multi-snake Environment** — Generalize the grid for N snakes (snake-vs-snake collisions, shared food, opponent-aware state channels).
+- **Self-play / AI vs AI** — Train agents against each other in the new environment.
+- **Ensemble Benchmarking** — Compare BC, RL, and self-play models head-to-head via the benchmark harness.
+- **Obstacles & Custom Boards** — Since the Hamiltonian teacher can't handle random obstacles, RL agents will step up to learn dynamic obstacle avoidance.
 
-#### Track B — New training paradigms
-
-- **Reward layer for RL** — additive wrapper deriving a reward signal from `(game_over, score)`, without changing `play_step`'s existing contract (BC stays reward-free by design)
-- **`src/train_rl.py`** — DQN/PPO trained from scratch (no teacher), reusing the 9-channel state representation
-- **Multi-snake environment** — generalize `SnakeGameAI` to N snakes: snake-vs-snake collisions, shared food, opponent-aware state channels
-- **Self-play / AI vs AI** — agents trained against each other on the multi-snake environment
-- **Ensemble / model comparison** — run BC, RL, and self-play checkpoints head-to-head via the benchmark harness
-
-#### Track C — Game modes
-
-- **Human vs AI** — extend `play_manual.py` to the multi-snake environment, one snake human-controlled
-- **Other boards / obstacles** — generalize `GRID_SIZE` and add obstacle cells. The Hamiltonian-cycle teacher doesn't generalize to obstacle maps, so this depends on Track B (an RL-trained agent, or a new BFS/A*-based "imperfect" teacher)
-- **Tournament / leaderboard tab in `launcher.py`** — pick checkpoints/modes, run them through the benchmark harness, show a results table
-
-#### Presentation polish
-
-- Status badges (Python version, license, framework)
-- Table of contents for easier navigation
-- Mermaid diagram of the training pipeline (env → teacher/DAgger → trainer → checkpoint → eval)
-- Optional: browser-playable demo (pygame → wasm via `pygbag`)
-- **Standalone Application** — create a fully self-contained executable so anyone can run the program on their OS out-of-the-box like a regular application, without installing Python, Visual Studio, or other dependencies
+#### 🎮 Future Expansions
+- **Human vs AI mode** — Extend `play_manual.py` to the multi-snake environment.
+- **Tournament / Leaderboard tab** — Pick checkpoints/modes, run them through the benchmark harness, and show a results table right in `launcher.py`.
+- **Architecture Experiments** — Residual blocks, deeper conv stacks, and alternative FC sizes for `SnakeNet`.
 
 ### License
 
