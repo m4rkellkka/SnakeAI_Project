@@ -27,6 +27,24 @@
 
 ## English
 
+### Table of Contents
+
+- [Overview](#overview)
+- [Demo](#demo)
+- [Features](#features)
+- [UI Gallery](#ui-gallery-before--after)
+- [How It Works](#how-it-works)
+- [Results](#results)
+- [Installation](#installation)
+- [Usage](#usage)
+- [Project Structure](#project-structure)
+- [Understanding the Code](#understanding-the-code)
+- [Customization](#customization)
+- [Troubleshooting](#troubleshooting)
+- [Roadmap](#roadmap)
+- [License](#license)
+- [Acknowledgments](#acknowledgments)
+
 ### Overview
 
 This project trains a neural network to play Snake by learning from a rule-based expert (the Hamiltonian-cycle teacher). The network learns to:
@@ -84,11 +102,12 @@ This project trains a neural network to play Snake by learning from a rule-based
 
 #### State Representation
 
-9-channel state array (all normalized to [0, 1]):
+10-channel state array (all normalized to [0, 1]):
 
-- **Channels 0–4 (egocentric, rotated):** head, body, food, danger map (walls + body), board-fullness
+- **Channels 0–5 (egocentric, rotated):** head, body, food, danger map (walls + body), board-fullness, visit history
   - Rotated so snake's head always faces "up" (egocentric perspective)
-- **Channels 5–8 (absolute, non-rotated):** one-hot absolute direction (compass fix)
+  - Channel 5 (visit history): binary map of head positions since last apple — helps detect looping
+- **Channels 6–9 (absolute, non-rotated):** one-hot absolute direction (compass fix)
   - Lets network distinguish turns by absolute grid position, not just local patterns
 
 #### Action Space
@@ -115,6 +134,22 @@ Relative to current heading: `[straight, turn right, turn left]` (not absolute d
 
 - **DAgger:** ~0–30% of steps use network's action (ramped over 100k steps), exposing distribution shift
 - **Curriculum:** After 150 games, 20% of episodes start with snakes of length 4–50 (late-game states)
+
+#### Pipeline Overview
+
+```mermaid
+flowchart TD
+    ENV["🎮 Game Environment\n16×16 grid"] -->|state| ST["📊 State Encoder\n10-channel array\negocentric + compass"]
+    ST --> T["📐 Teacher\nHamiltonian cycle + shortcuts"]
+    ST --> N["🧠 SnakeNet CNN\n10→16→32→32→8192→128→3"]
+    T -->|"label — every step"| BUF["📦 Replay Buffer\n50 000 (state, label) pairs"]
+    T -->|"DAgger: 0 → 70% of steps\ntakes action instead of network"| ENV
+    N -->|"action masked by safe_moves"| ENV
+    BUF -->|"batch 128 · every 16 steps"| TR["⚙️ Train\nCrossEntropyLoss · Adam"]
+    TR -->|"update weights"| N
+    ENV -->|"every 25 games"| EV["📋 Honest Eval\n15 games · network only · no teacher"]
+    EV -->|"new best avg score"| CK["💾 checkpoint_best.pth"]
+```
 
 ### Results
 
@@ -150,7 +185,7 @@ the mean score by ~20 points. Run it yourself with `tools/benchmark.py` (see [Us
 
 ```bash
 # Clone the repository
-git clone https://github.com/YOUR_USERNAME/SnakeAI_Project.git
+git clone https://github.com/m4rkellkka/SnakeAI_Project.git
 cd SnakeAI_Project
 
 # Create a virtual environment (optional but recommended)
@@ -259,6 +294,7 @@ Runs N games per checkpoint and reports full score distributions (mean/median/st
 | `src/teacher.py` | Perfect Hamiltonian-cycle algorithm with shortcuts; runnable demo |
 | `src/train_ai.py` | Network (`SnakeNet`), replay buffer, trainer, agent, main training/eval loop |
 | `src/play_manual.py` | Human-playable Snake (WASD / Arrow keys), same Pygame window |
+| `src/export_history.py` | Reads a checkpoint and dumps training history as JSON — used by Tauri's Models panel |
 | `app/` | Tauri v2 desktop app (React 19 frontend + Rust backend) — full GUI control panel |
 | `launcher.py` | Legacy Tkinter control panel |
 | `tools/record_demo.py` | Utility to record gameplay as animated GIFs |
@@ -269,7 +305,7 @@ Runs N games per checkpoint and reports full score distributions (mean/median/st
 **Key Classes:**
 
 - `SnakeGameAI` — Core game engine (state, collisions, food, reset)
-- `SnakeNet` — CNN classifier (9→16→32→32→8192→128→3 logits)
+- `SnakeNet` — CNN classifier (10→16→32→32→8192→128→3 logits)
 - `Agent` — Network wrapper with state representation, action selection, checkpointing
 - `Trainer` — Adam optimizer + CrossEntropyLoss training loop
 - `ReplayBuffer` — Simple ring buffer of (state, action) pairs
@@ -317,17 +353,19 @@ Runs N games per checkpoint and reports full score distributions (mean/median/st
 
 ### Roadmap
 
-Our planned next steps are grouped into milestones, leading up to our first stable release and beyond.
+#### 🚀 Version 1.0 (Current)
 
-#### 🚀 Version 1.0 (Upcoming First Stable Release)
-Our immediate goal is to finalize the behavioral cloning baseline and polish the presentation before stamping our first official release on GitHub.
+The behavioral cloning baseline is feature-complete. Key deliverables shipped:
 
-- **Finalize Feature Polish** — Add a few remaining features to the benchmark tooling and Tauri app.
-- **Standalone Application** — Tauri v2 desktop app (`app/`) is in progress; goal is a native installer so anyone can run without installing Python.
-- **Documentation & Presentation** — Complete the Mermaid diagram of the training pipeline, add a Table of Contents, and potentially a browser-playable demo (`pygbag`).
+- ✅ **Tauri desktop app** — dark-theme GUI with live training charts, Watch/Benchmark/Sweep/Models panels, and per-process management
+- ✅ **Documentation** — Table of Contents, Mermaid pipeline diagram, dual-language READMEs
+- ✅ **Hyperparameter sweeps** — named runs, CLI overrides, isolated checkpoints with `run_config` traceability
+- ✅ **Benchmark tooling** — full score distributions, seed-locked head-to-head checkpoint comparison
+- ✅ **Honest evaluation** — separate eval loop (no teacher), stuck-rate tracking, best-checkpoint preservation
+- **Standalone installer** (bundle Python via sidecar) — deferred to a future release
 
 #### 🧠 Version 2.0 (New Training Paradigms)
-After releasing v1.0, the focus shifts to entirely new methods of training beyond imitation learning.
+After v1.0, the focus shifts to entirely new methods of training beyond imitation learning.
 - **Reinforcement Learning (RL)** — Implement DQN/PPO trained from scratch (`src/train_rl.py`), adding a reward wrapper without breaking the existing environment API.
 - **Multi-snake Environment** — Generalize the grid for N snakes (snake-vs-snake collisions, shared food, opponent-aware state channels).
 - **Self-play / AI vs AI** — Train agents against each other in the new environment.
@@ -336,7 +374,7 @@ After releasing v1.0, the focus shifts to entirely new methods of training beyon
 
 #### 🎮 Future Expansions
 - **Human vs AI mode** — Extend `play_manual.py` to the multi-snake environment.
-- **Tournament / Leaderboard tab** — Pick checkpoints/modes, run them through the benchmark harness, and show a results table right in `launcher.py`.
+- **Tournament / Leaderboard tab** — Pick checkpoints/modes, run them through the benchmark harness, and show a results table in the Tauri app.
 - **Architecture Experiments** — Residual blocks, deeper conv stacks, and alternative FC sizes for `SnakeNet`.
 
 ### License
