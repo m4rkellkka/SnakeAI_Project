@@ -632,13 +632,17 @@ select.input option {
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
+.setup-log-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 6px 0;
+}
 .setup-log-line {
-  padding: 2px 14px;
+  padding: 1px 14px;
   font-family: var(--font-mono);
   font-size: 11px;
   color: #94a3b8;
   white-space: pre-wrap;
   word-break: break-all;
   line-height: 1.7;
-  overflow-y: auto;
 }

@@ -16,7 +16,7 @@ export default function SetupPanel({ envStatus, onRecheck, projectRoot }) {
 
   useEffect(() => {
     const u1 = listen("proc-out:setup-install", (e) => {
-      setLog((prev) => [...prev, e.payload]);
+      setLog((prev) => [...prev.slice(-199), e.payload]);
     });
     const u2 = listen("proc-done:setup-install", () => {
       setInstalling(false);
@@ -31,11 +31,7 @@ export default function SetupPanel({ envStatus, onRecheck, projectRoot }) {
     setDone(false);
     setInstalling(true);
     try {
-      await invoke("start_process", {
-        id: "setup-install",
-        args: ["-m", "pip", "install", "-r", "requirements.txt"],
-        cwd: projectRoot,
-      });
+      await invoke("install_deps", { cwd: projectRoot });
     } catch (e) {
       setLog((prev) => [...prev, `Error: ${e}`]);
       setInstalling(false);
@@ -138,13 +134,15 @@ export default function SetupPanel({ envStatus, onRecheck, projectRoot }) {
         </div>
 
         {log.length > 0 && (
-          <div className="setup-log" ref={logRef}>
+          <div className="setup-log">
             <div className="setup-log-head">
               {done ? "✅ Done — rechecking…" : "📦 pip output"}
             </div>
-            {log.map((line, i) => (
-              <div key={i} className="setup-log-line">{line}</div>
-            ))}
+            <div className="setup-log-body" ref={logRef}>
+              {log.map((line, i) => (
+                <div key={i} className="setup-log-line">{line}</div>
+              ))}
+            </div>
           </div>
         )}
       </div>

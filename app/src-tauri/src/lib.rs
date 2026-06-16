@@ -41,18 +41,26 @@ fn check_environment() -> EnvCheck {
         };
     }
 
-    let packages = ["torch", "pygame", "numpy", "matplotlib"];
-    let mut missing = Vec::new();
-    for pkg in &packages {
-        let ok = Command::new(&python)
-            .args(["-c", &format!("import {}", pkg)])
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false);
-        if !ok {
-            missing.push(pkg.to_string());
+    // Check all packages in a single subprocess using find_spec —
+    // avoids actually importing torch/CUDA which adds ~3s per call
+    let check_script =
+        "import importlib.util; \
+         pkgs=['torch','pygame','numpy','matplotlib']; \
+         missing=[p for p in pkgs if not importlib.util.find_spec(p)]; \
+         print(','.join(missing),end='')";
+
+    let result = Command::new(&python)
+        .args(["-c", check_script])
+        .output()
+        .ok();
+
+    let missing: Vec<String> = match result {
+        Some(out) => {
+            let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if s.is_empty() { vec![] } else { s.split(',').map(String::from).collect() }
         }
-    }
+        None => vec!["torch".into(), "pygame".into(), "numpy".into(), "matplotlib".into()],
+    };
 
     EnvCheck {
         python_ok: true,
@@ -60,6 +68,81 @@ fn check_environment() -> EnvCheck {
         deps_ok: missing.is_empty(),
         missing_packages: missing,
     }
+}
+
+#[tauri::command]
+fn install_deps(
+    app: AppHandle,
+    state: State<'_, ProcessRegistry>,
+    cwd: String,
+) -> Result<(), String> {
+    let python = find_python();
+    let id = "setup-install".to_string();
+
+    {
+        let map = state.0.lock().unwrap();
+        if let Some(&pid) = map.get(&id) {
+            kill_pid(pid);
+        }
+    }
+
+    // Upgrade pip first, then install requirements — chained in one shell call
+    let cmd = format!(
+        "{py} -m pip install --upgrade pip && {py} -m pip install -r requirements.txt",
+        py = python
+    );
+
+    let mut child = Command::new("/bin/sh")
+        .args(["-c", &cmd])
+        .current_dir(&cwd)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Failed to start install: {}", e))?;
+
+    let pid = child.id();
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+
+    {
+        let mut map = state.0.lock().unwrap();
+        map.insert(id.clone(), pid);
+    }
+
+    let registry = state.0.clone();
+
+    if let Some(out) = stdout {
+        let app_c = app.clone();
+        let id_c = id.clone();
+        std::thread::spawn(move || {
+            for line in BufReader::new(out).lines().flatten() {
+                let _ = app_c.emit(&format!("proc-out:{}", id_c), &line);
+            }
+        });
+    }
+
+    if let Some(err) = stderr {
+        let app_c = app.clone();
+        let id_c = id.clone();
+        std::thread::spawn(move || {
+            for line in BufReader::new(err).lines().flatten() {
+                let _ = app_c.emit(&format!("proc-out:{}", id_c), &format!("[err] {}", line));
+            }
+        });
+    }
+
+    let app_wait = app.clone();
+    let id_wait = id.clone();
+    std::thread::spawn(move || {
+        let _ = child.wait();
+        {
+            let mut map = registry.lock().unwrap();
+            map.remove(&id_wait);
+        }
+        let _ = app_wait.emit(&format!("proc-done:{}", id_wait), ());
+    });
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -295,6 +378,7 @@ pub fn run() {
             list_checkpoints,
             delete_model,
             check_environment,
+            install_deps,
             open_url,
         ])
         .run(tauri::generate_context!())
