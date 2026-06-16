@@ -6,6 +6,72 @@ use tauri::{AppHandle, Emitter, State};
 
 struct ProcessRegistry(Arc<Mutex<HashMap<String, u32>>>);
 
+#[derive(serde::Serialize)]
+struct EnvCheck {
+    python_ok: bool,
+    python_version: String,
+    deps_ok: bool,
+    missing_packages: Vec<String>,
+}
+
+#[tauri::command]
+fn check_environment() -> EnvCheck {
+    let python = find_python();
+
+    let version_out = Command::new(&python).arg("--version").output();
+    let (python_ok, python_version) = match version_out {
+        Ok(out) if out.status.success() => {
+            let v = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            let v = if v.is_empty() {
+                String::from_utf8_lossy(&out.stderr).trim().to_string()
+            } else {
+                v
+            };
+            (true, v)
+        }
+        _ => (false, String::new()),
+    };
+
+    if !python_ok {
+        return EnvCheck {
+            python_ok: false,
+            python_version: String::new(),
+            deps_ok: false,
+            missing_packages: vec!["torch".into(), "pygame".into(), "numpy".into(), "matplotlib".into()],
+        };
+    }
+
+    let packages = ["torch", "pygame", "numpy", "matplotlib"];
+    let mut missing = Vec::new();
+    for pkg in &packages {
+        let ok = Command::new(&python)
+            .args(["-c", &format!("import {}", pkg)])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if !ok {
+            missing.push(pkg.to_string());
+        }
+    }
+
+    EnvCheck {
+        python_ok: true,
+        python_version,
+        deps_ok: missing.is_empty(),
+        missing_packages: missing,
+    }
+}
+
+#[tauri::command]
+fn open_url(url: String) {
+    #[cfg(target_os = "macos")]
+    { Command::new("open").arg(&url).spawn().ok(); }
+    #[cfg(target_os = "windows")]
+    { Command::new("cmd").args(["/c", "start", "", &url]).spawn().ok(); }
+    #[cfg(target_os = "linux")]
+    { Command::new("xdg-open").arg(&url).spawn().ok(); }
+}
+
 fn find_python() -> String {
     Command::new("which")
         .arg("python3")
@@ -228,6 +294,8 @@ pub fn run() {
             fetch_history,
             list_checkpoints,
             delete_model,
+            check_environment,
+            open_url,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application")

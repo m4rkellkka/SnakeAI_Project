@@ -4,6 +4,7 @@ import TrainPanel from "./panels/TrainPanel";
 import WatchPanel from "./panels/WatchPanel";
 import BenchmarkPanel from "./panels/BenchmarkPanel";
 import ModelsPanel from "./panels/ModelsPanel";
+import SetupPanel from "./panels/SetupPanel";
 import "./App.css";
 
 const NAV = [
@@ -17,11 +18,21 @@ export default function App() {
   const [panel, setPanel] = useState("train");
   const [projectRoot, setProjectRoot] = useState("");
   const [running, setRunning] = useState([]);
+  const [envStatus, setEnvStatus] = useState(null);
+
+  const checkEnv = useCallback(async () => {
+    try {
+      const status = await invoke("check_environment");
+      setEnvStatus(status);
+    } catch (e) {
+      setEnvStatus({ python_ok: false, python_version: "", deps_ok: false, missing_packages: [] });
+    }
+  }, []);
 
   useEffect(() => {
     invoke("get_project_root").then(setProjectRoot);
-    
-    // Periodically poll the actual running processes from the rust backend
+    checkEnv();
+
     const interval = setInterval(async () => {
       try {
         const procs = await invoke("list_processes");
@@ -30,9 +41,9 @@ export default function App() {
         console.error("Failed to list processes", e);
       }
     }, 1000);
-    
+
     return () => clearInterval(interval);
-  }, []);
+  }, [checkEnv]);
 
   const isPanelRunning = (panelId) => {
     if (panelId === "train" || panelId === "benchmark") {
@@ -43,6 +54,27 @@ export default function App() {
     }
     return false;
   };
+
+  if (envStatus === null) {
+    return (
+      <div className="setup-screen">
+        <div className="setup-checking">
+          <span className="setup-logo-icon">🐍</span>
+          <p className="setup-checking-text">Checking environment…</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!envStatus.python_ok || !envStatus.deps_ok) {
+    return (
+      <SetupPanel
+        envStatus={envStatus}
+        onRecheck={checkEnv}
+        projectRoot={projectRoot}
+      />
+    );
+  }
 
   return (
     <div className="app">
