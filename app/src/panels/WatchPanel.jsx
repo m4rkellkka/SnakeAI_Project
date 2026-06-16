@@ -67,7 +67,7 @@ export default function WatchPanel({ projectRoot, runningList, isActive }) {
         }
       });
     }
-  }, [projectRoot]);
+  }, [projectRoot, isActive]);
 
   useEffect(() => {
     if (projectRoot && checkpoint) {

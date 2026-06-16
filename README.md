@@ -72,8 +72,13 @@ This project trains a neural network to play Snake by learning from a rule-based
 |:---:|:---:|
 | <img src="assets/game_old.png" width="400"> | <img src="assets/game_new.png" width="400"> |
 
-**Training Dashboard**
-<img src="assets/dashboard_new.png" width="800">
+**Tauri Desktop App MVP**
+<br>
+<img src="assets/mvp_ui.png" width="800">
+<br>
+<img src="assets/mvp_ui1.png" width="800">
+<br>
+<img src="assets/mvp_ui2.png" width="800">
 
 ### How It Works
 
