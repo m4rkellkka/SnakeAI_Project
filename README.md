@@ -6,6 +6,8 @@
   <img src="https://img.shields.io/badge/Python-3.8+-blue.svg?style=for-the-badge&logo=python&logoColor=white" alt="Python Badge"/>
   <img src="https://img.shields.io/badge/PyTorch-%23EE4C2C.svg?style=for-the-badge&logo=PyTorch&logoColor=white" alt="PyTorch Badge"/>
   <img src="https://img.shields.io/badge/Pygame-Green.svg?style=for-the-badge&logo=python&logoColor=white" alt="Pygame Badge"/>
+  <img src="https://img.shields.io/badge/Tauri-v2-FFC131.svg?style=for-the-badge&logo=tauri&logoColor=white" alt="Tauri Badge"/>
+  <img src="https://img.shields.io/badge/React-19-61DAFB.svg?style=for-the-badge&logo=react&logoColor=black" alt="React Badge"/>
   <img src="https://img.shields.io/badge/License-MIT-lightgrey.svg?style=for-the-badge" alt="License Badge"/>
   <img src="https://img.shields.io/badge/Status-Active-brightgreen.svg?style=for-the-badge" alt="Status Badge"/>
 </p>
@@ -54,6 +56,7 @@ This project trains a neural network to play Snake by learning from a rule-based
 - **Hamiltonian cycle teacher** with corner-cutting shortcuts (provably collision-free)
 - **Full reproducibility** — includes pretrained checkpoint + training logs
 - **Hyperparameter sweeps & benchmarking** — CLI overrides (`--lr`, `--dagger-prob-max`, `--curriculum-prob`, `--run-name`) for isolated, comparable runs, plus `tools/benchmark.py` for head-to-head checkpoint comparison
+- **Tauri desktop app** — self-contained GUI (`app/`) with live training charts, one-click watch/benchmark/sweep panels, and per-process management; no Python install exposed to the user
 
 ### UI Gallery (Before & After)
 
@@ -192,21 +195,39 @@ python src/train_ai.py --watch --games 10
 
 Load the best checkpoint from your training run.
 
-#### 5. **Tkinter Control Panel (All-in-One)**
+#### 5. **Tauri Desktop App (Recommended GUI)**
+
+```bash
+cd app
+npm install       # first time only
+npm run tauri dev # dev mode with hot-reload
+# or: npm run tauri build  →  produces a native .app / installer
+```
+
+Full-featured dark-theme dashboard with four panels:
+
+- **Train** — start/stop training with live score + eval charts and a colored log
+- **Watch AI** — one-click buttons for pretrained model, your checkpoint, teacher, or manual play (each opens its own Pygame window)
+- **Benchmark** — run N games with configurable checkpoint/seed/unstick toggle
+- **Sweep Run** — launch headless training with custom LR, DAgger prob, curriculum prob
+
+Requires: [Node.js](https://nodejs.org) ≥ 18 and [Rust](https://rustup.rs) (for `cargo`/Tauri CLI).
+
+#### 6. **Tkinter Control Panel (Legacy)**
 
 ```bash
 python launcher.py
 ```
 
-Simple GUI to launch training, watch games, view stats, and stop processes.
+Simple alternative GUI — still works, no extra dependencies beyond Python + Tkinter.
 
-#### 6. **Custom Game Count**
+#### 7. **Custom Game Count**
 
 ```bash
 python src/train_ai.py --watch --pretrained --games 25
 ```
 
-#### 7. **Hyperparameter Sweep Run**
+#### 8. **Hyperparameter Sweep Run**
 
 ```bash
 python src/train_ai.py --headless --run-name sweep_lr0.001 \
@@ -215,7 +236,7 @@ python src/train_ai.py --headless --run-name sweep_lr0.001 \
 
 Override `LR`, `DAGGER_PROB_MAX`, or `CURRICULUM_PROB` for a single run. `--run-name` isolates checkpoints and `learning_curve.png` under `model/<run-name>/`, so sweeps don't clobber each other or the main run — each checkpoint also stores its `run_config` for traceability. Or use the **New Sweep Run** dashboard in `launcher.py`.
 
-#### 8. **Benchmark Checkpoints**
+#### 9. **Benchmark Checkpoints**
 
 ```bash
 python tools/benchmark.py --checkpoint checkpoint_best.pth \
@@ -227,12 +248,14 @@ Runs N games per checkpoint and reports full score distributions (mean/median/st
 
 ### Project Structure
 
-| File | Purpose |
-|------|---------|
+| File / Directory | Purpose |
+| ---------------- | ------- |
 | `src/snake_game.py` | Game engine (`SnakeGameAI`), grid constants, Hamiltonian cycle |
 | `src/teacher.py` | Perfect Hamiltonian-cycle algorithm with shortcuts; runnable demo |
 | `src/train_ai.py` | Network (`SnakeNet`), replay buffer, trainer, agent, main training/eval loop |
-| `launcher.py` | Tkinter control panel for easy access to all features |
+| `src/play_manual.py` | Human-playable Snake (WASD / Arrow keys), same Pygame window |
+| `app/` | Tauri v2 desktop app (React 19 frontend + Rust backend) — full GUI control panel |
+| `launcher.py` | Legacy Tkinter control panel |
 | `tools/record_demo.py` | Utility to record gameplay as animated GIFs |
 | `tools/benchmark.py` | Benchmark harness — run N games per checkpoint, report score distributions & comparisons |
 
@@ -293,8 +316,9 @@ Our planned next steps are grouped into milestones, leading up to our first stab
 
 #### 🚀 Version 1.0 (Upcoming First Stable Release)
 Our immediate goal is to finalize the behavioral cloning baseline and polish the presentation before stamping our first official release on GitHub.
-- **Finalize Feature Polish** — Add a few remaining features to the `launcher.py` and benchmark tooling.
-- **Standalone Application** — Create a fully self-contained executable so anyone can run the program out-of-the-box without installing Python.
+
+- **Finalize Feature Polish** — Add a few remaining features to the benchmark tooling and Tauri app.
+- **Standalone Application** — Tauri v2 desktop app (`app/`) is in progress; goal is a native installer so anyone can run without installing Python.
 - **Documentation & Presentation** — Complete the Mermaid diagram of the training pipeline, add a Table of Contents, and potentially a browser-playable demo (`pygbag`).
 
 #### 🧠 Version 2.0 (New Training Paradigms)

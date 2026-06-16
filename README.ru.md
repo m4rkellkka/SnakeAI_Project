@@ -6,6 +6,8 @@
   <img src="https://img.shields.io/badge/Python-3.8+-blue.svg?style=for-the-badge&logo=python&logoColor=white" alt="Python Badge"/>
   <img src="https://img.shields.io/badge/PyTorch-%23EE4C2C.svg?style=for-the-badge&logo=PyTorch&logoColor=white" alt="PyTorch Badge"/>
   <img src="https://img.shields.io/badge/Pygame-Green.svg?style=for-the-badge&logo=python&logoColor=white" alt="Pygame Badge"/>
+  <img src="https://img.shields.io/badge/Tauri-v2-FFC131.svg?style=for-the-badge&logo=tauri&logoColor=white" alt="Tauri Badge"/>
+  <img src="https://img.shields.io/badge/React-19-61DAFB.svg?style=for-the-badge&logo=react&logoColor=black" alt="React Badge"/>
   <img src="https://img.shields.io/badge/License-MIT-lightgrey.svg?style=for-the-badge" alt="License Badge"/>
   <img src="https://img.shields.io/badge/Status-Active-brightgreen.svg?style=for-the-badge" alt="Status Badge"/>
 </p>
@@ -54,6 +56,7 @@
 - **Учитель на цикле Гамильтона** с сокращающими угол шагами (доказано безопасно)
 - **Полная воспроизводимость** — включены обученная модель и логи обучения
 - **Подбор гиперпараметров и бенчмарк** — CLI-флаги (`--lr`, `--dagger-prob-max`, `--curriculum-prob`, `--run-name`) для изолированных, сравнимых запусков, плюс `tools/benchmark.py` для сравнения чекпойнтов друг с другом
+- **Tauri-приложение** — автономный GUI (`app/`) с живыми графиками обучения, кнопками запуска watch/benchmark/sweep и управлением процессами; Python не нужен конечному пользователю
 
 ### Галерея интерфейса (До / После)
 
@@ -137,7 +140,8 @@
 #### Требования
 
 - Python 3.8+
-- Для `launcher.py`: Tkinter (включён на macOS/Windows; на Linux: `apt install python3-tk`)
+- Для `launcher.py` (legacy): Tkinter (включён на macOS/Windows; на Linux: `apt install python3-tk`)
+- Для Tauri-приложения (`app/`): [Node.js](https://nodejs.org) ≥ 18 и [Rust](https://rustup.rs) (`cargo` / Tauri CLI)
 
 #### Подготовка
 
@@ -193,30 +197,46 @@ python src/train_ai.py --watch --games 10
 
 Загрузить лучший чекпойнт из своего обучения.
 
-#### 5. **Панель управления Tkinter (все в одном)**
+#### 5. **Tauri-приложение (рекомендуемый GUI)**
+
+```bash
+cd app
+npm install        # только при первом запуске
+npm run tauri dev  # dev-режим с горячей перезагрузкой
+# или: npm run tauri build  →  нативный .app / инсталлятор
+```
+
+Полнофункциональная тёмная панель управления с четырьмя панелями:
+
+- **Train** — запуск/остановка обучения, живые графики score + eval, цветной лог
+- **Watch AI** — кнопки для pretrained-модели, своего чекпойнта, учителя или ручной игры (каждая открывает Pygame-окно)
+- **Benchmark** — N игр с настройкой чекпойнта/seed/unstick
+- **Sweep Run** — headless-обучение с кастомными LR, DAgger prob, curriculum prob
+
+#### 6. **Панель управления Tkinter (Legacy)**
 
 ```bash
 python launcher.py
 ```
 
-Простой интерфейс для обучения, просмотра игр, статистики и остановки процессов.
+Простая альтернатива — работает без дополнительных зависимостей, кроме Python + Tkinter.
 
-#### 6. **Пользовательское количество игр**
+#### 7. **Пользовательское количество игр**
 
 ```bash
 python src/train_ai.py --watch --pretrained --games 25
 ```
 
-#### 7. **Запуск с подбором гиперпараметров (sweep)**
+#### 8. **Запуск с подбором гиперпараметров (sweep)**
 
 ```bash
 python src/train_ai.py --headless --run-name sweep_lr0.001 \
     --lr 0.001 --dagger-prob-max 0.5 --curriculum-prob 0.3
 ```
 
-Переопределяет `LR`, `DAGGER_PROB_MAX` или `CURRICULUM_PROB` для одного запуска. `--run-name` изолирует чекпойнты и `learning_curve.png` в `model/<run-name>/`, чтобы sweep-запуски не перезатирали друг друга или основной прогон — каждый чекпойнт также хранит свой `run_config` для трассировки. Либо используйте панель **New Sweep Run** в `launcher.py`.
+Переопределяет `LR`, `DAGGER_PROB_MAX` или `CURRICULUM_PROB` для одного запуска. `--run-name` изолирует чекпойнты и `learning_curve.png` в `model/<run-name>/`, чтобы sweep-запуски не перезатирали друг друга или основной прогон — каждый чекпойнт также хранит свой `run_config` для трассировки.
 
-#### 8. **Бенчмарк чекпойнтов**
+#### 9. **Бенчмарк чекпойнтов**
 
 ```bash
 python tools/benchmark.py --checkpoint checkpoint_best.pth \
@@ -228,12 +248,14 @@ python tools/benchmark.py --checkpoint checkpoint_best.pth \
 
 ### Структура проекта
 
-| Файл | Назначение |
-|------|-----------|
+| Файл / Директория | Назначение |
+| ----------------- | ---------- |
 | `src/snake_game.py` | Двигатель игры (`SnakeGameAI`), константы сетки, цикл Гамильтона |
 | `src/teacher.py` | Совершенный алгоритм цикла Гамильтона с сокращениями; демо |
 | `src/train_ai.py` | Сеть (`SnakeNet`), буфер воспроизведения, тренер, агент, цикл обучения/оценки |
-| `launcher.py` | Панель управления Tkinter для доступа ко всем функциям |
+| `src/play_manual.py` | Ручная игра в Snake (WASD / стрелки), то же Pygame-окно |
+| `app/` | Tauri v2 приложение (React 19 frontend + Rust backend) — полная GUI-панель управления |
+| `launcher.py` | Legacy-панель управления Tkinter |
 | `tools/record_demo.py` | Утилита для записи геймплея как анимированных GIF |
 | `tools/benchmark.py` | Бенчмарк-харнесс — прогоняет N игр на чекпойнт, выдаёт распределение score и сравнение |
 
@@ -294,8 +316,9 @@ python tools/benchmark.py --checkpoint checkpoint_best.pth \
 
 #### 🚀 Версия 1.0 (Грядущий первый стабильный релиз)
 Наша ближайшая цель — завершить базовую версию с поведенческим клонированием и отполировать проект перед первым официальным релизом на GitHub.
-- **Доработка функционала** — Добавить пару последних функций в `launcher.py` и инструменты бенчмарка.
-- **Standalone-приложение** — Создать полностью автономный исполняемый файл для запуска программы как обычного приложения, без установки Python.
+
+- **Доработка функционала** — Добавить пару последних функций в инструменты бенчмарка и Tauri-приложение.
+- **Standalone-приложение** — Tauri v2 (`app/`) в процессе; цель — нативный инсталлятор без необходимости устанавливать Python.
 - **Документация и презентация** — Добавить Mermaid-диаграмму пайплайна обучения, оглавление и, возможно, браузерное демо (`pygbag`).
 
 #### 🧠 Версия 2.0 (Новые методы обучения)
@@ -308,7 +331,7 @@ python tools/benchmark.py --checkpoint checkpoint_best.pth \
 
 #### 🎮 Будущие расширения
 - **Режим Человек vs AI** — Расширить `play_manual.py` на multi-snake окружение.
-- **Вкладка Турнир/Лидерборд** — Выбирать чекпойнты/режимы, прогонять через benchmark harness и показывать таблицу результатов прямо в `launcher.py`.
+- **Вкладка Турнир/Лидерборд** — Выбирать чекпойнты/режимы, прогонять через benchmark harness и показывать таблицу результатов в Tauri-приложении.
 - **Эксперименты с архитектурой сети** — Residual blocks, более глубокие свертки и альтернативные размеры FC для `SnakeNet`.
 
 ### Лицензия
