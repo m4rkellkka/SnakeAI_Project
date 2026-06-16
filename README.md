@@ -1,8 +1,25 @@
-# 🐍 Snake AI
+<p align="center">
+  <img src="assets/snake_ai_banner.png" alt="Snake AI Banner" width="100%">
+</p>
 
-A Snake game environment paired with a CNN classifier trained via **behavioral cloning + DAgger-lite** to imitate a near-perfect **Hamiltonian-cycle teacher** algorithm. This project demonstrates learning-from-demonstration (LfD) with a clean, hands-on implementation.
+<p align="center">
+  <img src="https://img.shields.io/badge/Python-3.8+-blue.svg?style=for-the-badge&logo=python&logoColor=white" alt="Python Badge"/>
+  <img src="https://img.shields.io/badge/PyTorch-%23EE4C2C.svg?style=for-the-badge&logo=PyTorch&logoColor=white" alt="PyTorch Badge"/>
+  <img src="https://img.shields.io/badge/Pygame-Green.svg?style=for-the-badge&logo=python&logoColor=white" alt="Pygame Badge"/>
+  <img src="https://img.shields.io/badge/License-MIT-lightgrey.svg?style=for-the-badge" alt="License Badge"/>
+  <img src="https://img.shields.io/badge/Status-Active-brightgreen.svg?style=for-the-badge" alt="Status Badge"/>
+</p>
 
-**Language:** [English](#english) | [Русский](#русский) ([README.ru.md](README.ru.md))
+<h1 align="center">🐍 Snake AI</h1>
+
+<p align="center">
+  <strong>A Snake game environment paired with a CNN classifier trained via behavioral cloning + DAgger-lite to imitate a near-perfect Hamiltonian-cycle teacher algorithm.</strong><br>
+  <em>This project demonstrates learning-from-demonstration (LfD) with a clean, hands-on implementation.</em>
+</p>
+
+<p align="center">
+  <b>Language:</b> <a href="#english">English</a> | <a href="#русский">Русский</a> (<a href="README.ru.md">README.ru.md</a>)
+</p>
 
 ---
 

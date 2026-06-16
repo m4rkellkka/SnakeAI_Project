@@ -1,8 +1,25 @@
-# 🐍 Snake AI
+<p align="center">
+  <img src="assets/snake_ai_banner.png" alt="Snake AI Banner" width="100%">
+</p>
 
-Среда Snake-игры с CNN-классификатором, обученным через **behavioral cloning + DAgger-lite** имитировать алгоритм совершенного **учителя на основе цикла Гамильтона**. Проект демонстрирует обучение по примерам (LfD) в чистом, практическом виде.
+<p align="center">
+  <img src="https://img.shields.io/badge/Python-3.8+-blue.svg?style=for-the-badge&logo=python&logoColor=white" alt="Python Badge"/>
+  <img src="https://img.shields.io/badge/PyTorch-%23EE4C2C.svg?style=for-the-badge&logo=PyTorch&logoColor=white" alt="PyTorch Badge"/>
+  <img src="https://img.shields.io/badge/Pygame-Green.svg?style=for-the-badge&logo=python&logoColor=white" alt="Pygame Badge"/>
+  <img src="https://img.shields.io/badge/License-MIT-lightgrey.svg?style=for-the-badge" alt="License Badge"/>
+  <img src="https://img.shields.io/badge/Status-Active-brightgreen.svg?style=for-the-badge" alt="Status Badge"/>
+</p>
 
-**Language:** [English](README.md) | [Русский](#русский)
+<h1 align="center">🐍 Snake AI</h1>
+
+<p align="center">
+  <strong>Среда Snake-игры с CNN-классификатором, обученным через behavioral cloning + DAgger-lite имитировать алгоритм совершенного учителя на основе цикла Гамильтона.</strong><br>
+  <em>Проект демонстрирует обучение по примерам (LfD) в чистом, практическом виде.</em>
+</p>
+
+<p align="center">
+  <b>Language:</b> <a href="README.md">English</a> | <a href="#русский">Русский</a>
+</p>
 
 ---
 
