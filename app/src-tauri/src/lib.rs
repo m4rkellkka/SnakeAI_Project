@@ -16,7 +16,8 @@ struct EnvCheck {
 
 #[tauri::command]
 fn check_environment() -> EnvCheck {
-    let python = find_python();
+    let base = get_project_root();
+    let python = find_python(&base);
 
     let version_out = Command::new(&python).arg("--version").output();
     let (python_ok, python_version) = match version_out {
@@ -80,7 +81,7 @@ fn install_deps(
     state: State<'_, ProcessRegistry>,
     cwd: String,
 ) -> Result<(), String> {
-    let python = find_python();
+    let python = find_python(&cwd);
     let id = "setup-install".to_string();
 
     {
@@ -160,8 +161,14 @@ fn open_url(url: String) {
     { Command::new("xdg-open").arg(&url).spawn().ok(); }
 }
 
-fn find_python() -> String {
-    // Use a login shell so PATH matches the user's terminal (homebrew, pyenv, etc.)
+fn find_python(base: &str) -> String {
+    // Prefer a project-local venv — guarantees the right packages regardless of system state
+    let venv = std::path::Path::new(base).join(".venv").join("bin").join("python3");
+    if venv.exists() {
+        return venv.to_string_lossy().to_string();
+    }
+
+    // Fallback: use a login shell so PATH matches the user's terminal (homebrew, pyenv, etc.)
     let via_shell = Command::new("/bin/zsh")
         .args(["-l", "-c", "which python3"])
         .output()
@@ -174,7 +181,6 @@ fn find_python() -> String {
         return p;
     }
 
-    // Fallback: plain which
     Command::new("which")
         .arg("python3")
         .output()
@@ -225,7 +231,7 @@ fn start_process(
         }
     }
 
-    let python = find_python();
+    let python = find_python(&cwd);
 
     let mut child = Command::new(&python)
         .args(&args)
@@ -305,7 +311,7 @@ fn quit_app(app: AppHandle, state: State<'_, ProcessRegistry>) {
 
 #[tauri::command]
 fn fetch_history(cwd: String, checkpoint_path: String) -> Result<String, String> {
-    let python = find_python();
+    let python = find_python(&cwd);
     let output = Command::new(&python)
         .arg("src/export_history.py")
         .arg(&checkpoint_path)
