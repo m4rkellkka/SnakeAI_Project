@@ -10,8 +10,9 @@ import numpy as np
 import matplotlib
 matplotlib.use('Agg')  # No GUI — compatible with Pygame on macOS
 import matplotlib.pyplot as plt
-from snake_game import SnakeGameAI, Direction, BLOCK_SIZE, GRID_SIZE
+from snake_game import SnakeGameAI, GRID_SIZE
 from teacher import get_best_move
+from state_encoding import encode_state
 
 # On multi-core Macs, torch defaults to using all cores (8–10) for convolutions,
 # which starves Pygame's event loop during training. The network is small, so
@@ -32,11 +33,8 @@ LR = 0.0005
 TRAIN_EVERY_N_STEPS = 16
 GRAD_CLIP_NORM = 10
 
-# Channel 5 (visit history) is encoded as a normalized visit COUNT per cell since the
-# last apple, not just a binary mask. This lets the network perceive "I've re-entered
-# this cell N times" — the signal it needs to notice it's stuck in a loop. Counts are
-# capped and scaled to [0, 1] by this value.
-VISIT_COUNT_CAP = 4
+# The 10-channel state encoding (and VISIT_COUNT_CAP) now lives in state_encoding.py,
+# shared with the RL trainer (train_rl.py). Agent.get_state calls encode_state().
 
 # Teacher labels are heavily skewed toward "straight"; turns (where loops form) are
 # under-represented, so they get under-trained. Mildly up-weight the two turn classes in
@@ -93,7 +91,7 @@ EVAL_GAMES = 30
 # global RNG state around this so training's own randomness is unaffected.
 EVAL_SEED = 1234
 
-SAVE_EVERY_N_GAMES = 10
+SAVE_EVERY_N_GAMES = 5
 MODEL_FOLDER = './model'
 PLOT_EVERY_N_GAMES = 10
 
@@ -237,63 +235,8 @@ class Agent:
         self.score_history = []
 
     def get_state(self, game):
-        state = np.zeros((10, GRID_SIZE, GRID_SIZE), dtype=np.float32)
-
-        # Channels 0–4: head, body, food, danger, fullness (before rotation, absolute coords)
-
-        # Channel 0: head
-        head = game.snake[0]
-        hx, hy = head.x // BLOCK_SIZE, head.y // BLOCK_SIZE
-        state[0, hy, hx] = 1.0
-
-        # Channel 1: body
-        for pt in game.snake[1:]:
-            bx, by = pt.x // BLOCK_SIZE, pt.y // BLOCK_SIZE
-            state[1, by, bx] = 1.0
-
-        # Channel 2: food
-        for f in game.foods:
-            fx, fy = f.x // BLOCK_SIZE, f.y // BLOCK_SIZE
-            state[2, fy, fx] = 1.0
-
-        # Channel 3: danger map — border ring (walls) + body cells
-        state[3, 0, :] = 1.0
-        state[3, -1, :] = 1.0
-        state[3, :, 0] = 1.0
-        state[3, :, -1] = 1.0
-        for pt in game.snake[1:]:
-            bx, by = pt.x // BLOCK_SIZE, pt.y // BLOCK_SIZE
-            state[3, by, bx] = 1.0
-
-        # Channel 4: board fullness
-        state[4, :, :] = len(game.snake) / (GRID_SIZE ** 2)
-
-        # Channel 5: visit COUNT per cell since last food (egocentric — rotated with 0–4),
-        # normalized to [0, 1] by VISIT_COUNT_CAP. Unlike a binary mask, this lets the
-        # network perceive how many times it has re-entered a cell — the signal it needs
-        # to detect it's stuck in a loop. Cleared on each apple.
-        for (vx, vy), cnt in game.visited_since_food.items():
-            state[5, vy, vx] = min(cnt, VISIT_COUNT_CAP) / VISIT_COUNT_CAP
-
-        # Channels 6–9: absolute direction (one-hot, not rotated!)
-        # Compass fix: direction is encoded separately (absolute, not egocentric).
-        # This lets the network distinguish cycle turns that depend on absolute
-        # position (even/odd columns in the serpentine grid), not just local patterns.
-        dir_idx = [Direction.UP, Direction.LEFT, Direction.DOWN, Direction.RIGHT].index(game.direction)
-        state[6 + dir_idx, :, :] = 1.0
-
-        # Egocentric view for channels 0–5: rotate so head faces "up".
-        # Channel 5 (visited) is positional, so it rotates with the egocentric block.
-        # Channels 6–9 (direction) remain in absolute coordinates.
-        if game.direction == Direction.RIGHT:
-            state[:6] = np.rot90(state[:6], k=1, axes=(1, 2))
-        elif game.direction == Direction.DOWN:
-            state[:6] = np.rot90(state[:6], k=2, axes=(1, 2))
-        elif game.direction == Direction.LEFT:
-            state[:6] = np.rot90(state[:6], k=3, axes=(1, 2))
-
-        # rot90 returns a view with negative strides — copy it for PyTorch compatibility.
-        return state.copy()
+        # The 10-channel encoding is shared with the RL trainer — see state_encoding.py.
+        return encode_state(game)
 
     def get_network_action(self, state, game):
         """Forward pass through network + masking by safe_moves().
@@ -438,7 +381,7 @@ def train(headless=True, load_checkpoint='checkpoint_last.pth'):
     # Sweep traceability: captured after CLI overrides have been applied to the module
     # globals (in __main__, before train() is called). Round-trips through checkpoint
     # dicts for benchmark.py to display — not a persistent Agent attribute.
-    run_config = {'lr': LR, 'dagger_prob_max': DAGGER_PROB_MAX, 'curriculum_prob': CURRICULUM_PROB}
+    run_config = {'algo': 'bc', 'lr': LR, 'dagger_prob_max': DAGGER_PROB_MAX, 'curriculum_prob': CURRICULUM_PROB}
     print(f"Config: LR={LR}, DAGGER_PROB_MAX={DAGGER_PROB_MAX}, "
           f"CURRICULUM_PROB={CURRICULUM_PROB}, MODEL_FOLDER={MODEL_FOLDER}", flush=True)
 
@@ -648,7 +591,7 @@ if __name__ == '__main__':
 
     if args.init_only:
         agent = Agent()
-        run_config = {'lr': LR, 'dagger_prob_max': DAGGER_PROB_MAX, 'curriculum_prob': CURRICULUM_PROB}
+        run_config = {'algo': 'bc', 'lr': LR, 'dagger_prob_max': DAGGER_PROB_MAX, 'curriculum_prob': CURRICULUM_PROB}
         agent.save_checkpoint('checkpoint_last.pth', run_config=run_config)
         agent.save_checkpoint('checkpoint_best.pth', eval_score=0.0, run_config=run_config)
         print(f"Initialized new model at {MODEL_FOLDER} with config: {run_config}", flush=True)

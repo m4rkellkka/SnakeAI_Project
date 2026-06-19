@@ -611,6 +611,7 @@ body {
 .stat--orange::after { background: var(--orange); }
 .stat--purple::after { background: var(--purple); }
 .stat--cyan::after { background: var(--cyan); }
+.stat--yellow::after { background: #eab308; }
 
 .stat-label {
   font-size: var(--text-xs);
@@ -630,6 +631,7 @@ body {
 .stat-val--orange { color: var(--orange); text-shadow: 0 0 12px rgba(245, 158, 11, 0.3); }
 .stat-val--purple { color: var(--purple); text-shadow: 0 0 12px rgba(139, 92, 246, 0.3); }
 .stat-val--cyan { color: var(--cyan); text-shadow: 0 0 12px rgba(6, 182, 212, 0.3); }
+.stat-val--yellow { color: #eab308; text-shadow: 0 0 12px rgba(234, 179, 8, 0.3); }
 .stat-hint {
   font-size: var(--text-xs);
   color: var(--muted-2);
@@ -981,6 +983,27 @@ select.input {
 select.input option {
   background: #18181b;
   color: #fff;
+}
+
+.algo-badge {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: var(--text-xs, 11px);
+  font-weight: 600;
+  vertical-align: middle;
+  letter-spacing: 0.02em;
+}
+.algo-badge--bc {
+  background: rgba(139, 92, 246, 0.15);
+  color: #a78bfa;
+  border: 1px solid rgba(139, 92, 246, 0.3);
+}
+.algo-badge--rl {
+  background: rgba(16, 185, 129, 0.15);
+  color: #34d399;
+  border: 1px solid rgba(16, 185, 129, 0.3);
 }
 
 /* ═══════════════════════════════════════════════════

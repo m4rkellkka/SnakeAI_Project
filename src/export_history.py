@@ -25,6 +25,8 @@ def main():
             'loss_history': checkpoint.get('loss_history', []),
             'mean_loss_history': checkpoint.get('mean_loss_history', []),
             'score_history': checkpoint.get('score_history', []),
+            'reward_history': checkpoint.get('reward_history', []),
+            'algo': checkpoint.get('algo', checkpoint.get('config', {}).get('algo', 'bc')),
             'creation_date': os.path.getmtime(path)
         }
         print(json.dumps(history))

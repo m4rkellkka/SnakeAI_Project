@@ -6,7 +6,7 @@ import EmptyState from "../components/EmptyState";
 import { formatCheckpoint, formatNumber, formatInteger } from "../utils";
 import { usePersistedState, readPersisted, writePersisted, removePersisted } from "../hooks/usePersistedState";
 
-const GAME_RE = /^Game: (\d+)(?:\s*\[.*?\])?\s*\|\s*Score: (\d+)\s*\|\s*Loss: ([\d.]+)\s*\|\s*Steps: (\d+)/;
+const GAME_RE = /^Game: (\d+)(?:\s*\[.*?\])?\s*\|\s*Score: (\d+)\s*\|\s*Loss: ([\d.]+)\s*\|\s*Steps: (\d+)(?:\s*\|\s*Reward:\s*([\-\d.]+))?/;
 const EVAL_RE = /Honest eval: avg=([\d.]+), max=(\d+)/;
 
 const CHART_STYLE = {
@@ -30,9 +30,11 @@ export default function TrainPanel({ projectRoot, isRunning, isActive }) {
   const [gameData, setGameData] = useState([]);
   const [evalData, setEvalData] = useState([]);
   const [lossData, setLossData] = useState([]);
+  const [rewardData, setRewardData] = useState([]);
   const [lastGame, setLastGame] = useState(() => readPersisted("train:lastGame", null));
   const [lastEval, setLastEval] = useState(() => readPersisted("train:lastEval", null));
   const [logCollapsed, setLogCollapsed] = usePersistedState("train:logCollapsed", false);
+  const [runAlgo, setRunAlgo] = useState("bc");
 
   const [checkpointList, setCheckpointList] = useState(["checkpoint_last.pth"]);
   const [loadCheckpoint, setLoadCheckpoint] = usePersistedState("train:loadCheckpoint", "checkpoint_last.pth");
@@ -45,6 +47,7 @@ export default function TrainPanel({ projectRoot, isRunning, isActive }) {
   const gameBuf     = useRef([]);
   const lossBuf     = useRef([]);
   const evalBuf     = useRef([]);
+  const rewardBuf   = useRef([]);
   const lossMeanRef = useRef({ sum: 0, count: 0 });
   const logBodyRef  = useRef(null);
   const lastGameRef = useRef(null);
@@ -82,6 +85,13 @@ export default function TrainPanel({ projectRoot, isRunning, isActive }) {
       const newLossData = [];
       const newEvalData = [];
       const newGameData = [];
+      const newRewardData = [];
+      
+      if (hist.algo) {
+        setRunAlgo(hist.algo);
+      } else {
+        setRunAlgo("bc");
+      }
       
       if (hist.loss_history && hist.mean_loss_history) {
         for (let i = 0; i < hist.loss_history.length; i++) {
@@ -115,6 +125,16 @@ export default function TrainPanel({ projectRoot, isRunning, isActive }) {
         }
       }
       
+      if (hist.reward_history) {
+        let r_start = Math.max(1, (hist.n_games || 0) - (hist.reward_history.length || 0) + 1);
+        for (let i = 0; i < hist.reward_history.length; i++) {
+          newRewardData.push({
+            game: r_start + i,
+            reward: hist.reward_history[i]
+          });
+        }
+      }
+      
       // Seed the running-mean accumulator so live loss points continue the
       // mean from where the loaded history left off (instead of restarting at 0).
       lossMeanRef.current = {
@@ -125,6 +145,7 @@ export default function TrainPanel({ projectRoot, isRunning, isActive }) {
       setLossData(newLossData.slice(-600));
       setEvalData(newEvalData.slice(-300));
       setGameData(newGameData.slice(-600));
+      setRewardData(newRewardData.slice(-600));
       
       if (newEvalData.length > 0) {
         setLastEval(newEvalData[newEvalData.length - 1]);
@@ -156,9 +177,15 @@ export default function TrainPanel({ projectRoot, isRunning, isActive }) {
         const gameIdx = +gm[1];
         const loss = +parseFloat(gm[3]).toFixed(4);
         const steps = +gm[4];
-        const entry = { game: gameIdx, score: +gm[2], loss, steps };
+        const rewardStr = gm[5];
+        const reward = rewardStr !== undefined ? +parseFloat(rewardStr).toFixed(2) : undefined;
+        
+        const entry = { game: gameIdx, score: +gm[2], loss, steps, reward };
         gameBuf.current.push(entry);
         lossBuf.current.push({ game: gameIdx, loss });
+        if (reward !== undefined) {
+          rewardBuf.current.push({ game: gameIdx, reward });
+        }
         lastGameRef.current = entry;
       }
 
@@ -201,6 +228,10 @@ export default function TrainPanel({ projectRoot, isRunning, isActive }) {
       if (evalBuf.current.length) {
         const next = evalBuf.current.splice(0);
         setEvalData((p) => [...p, ...next].slice(-300));
+      }
+      if (rewardBuf.current.length) {
+        const next = rewardBuf.current.splice(0);
+        setRewardData((p) => [...p, ...next].slice(-600));
       }
     }, 120);
 
@@ -246,14 +277,14 @@ export default function TrainPanel({ projectRoot, isRunning, isActive }) {
 
   const handleStart = async () => {
     if (!projectRoot) return;
-    setLog([]); setGameData([]); setEvalData([]); setLossData([]);
+    setLog([]); setGameData([]); setEvalData([]); setLossData([]); setRewardData([]);
     setLastGame(null); setLastEval(null);
     lastGameRef.current = null;
-    logBuf.current = []; gameBuf.current = []; lossBuf.current = []; evalBuf.current = [];
+    logBuf.current = []; gameBuf.current = []; lossBuf.current = []; evalBuf.current = []; rewardBuf.current = [];
     lossMeanRef.current = { sum: 0, count: 0 };
     isUserScrolling.current = false;
     
-    const args = ["-u", "src/train_ai.py"];
+    const args = ["-u", runAlgo === "dqn" ? "src/train_rl.py" : "src/train_ai.py"];
 
     // Default run writes to model/checkpoint_last.pth; a named run writes to
     // model/<run-name>/checkpoint_last.pth. Remember whichever it is so a reload
@@ -303,7 +334,9 @@ export default function TrainPanel({ projectRoot, isRunning, isActive }) {
         </span>
       </div>
       <p className="panel-desc">
-        Train a neural network to play Snake using reinforcement learning with DAgger and curriculum strategies.
+        {runAlgo === "dqn" 
+          ? "Train a neural network to play Snake using Reinforcement Learning (Double DQN)."
+          : "Train a neural network to play Snake using behavioral cloning (DAgger) and curriculum strategies."}
       </p>
 
       <div className="controls">
@@ -341,6 +374,13 @@ export default function TrainPanel({ projectRoot, isRunning, isActive }) {
             <span className="stat-val stat-val--purple">{lastGame?.loss?.toFixed(4) ?? "—"}</span>
             <span className="stat-hint">Cross-entropy</span>
           </div>
+          {runAlgo === "dqn" && (
+            <div className="stat stat--yellow">
+              <span className="stat-label">Reward</span>
+              <span className="stat-val stat-val--yellow">{lastGame?.reward?.toFixed(1) ?? "—"}</span>
+              <span className="stat-hint">Episode total</span>
+            </div>
+          )}
           <div className="stat stat--green">
             <span className="stat-label">Eval Avg</span>
             <span className="stat-val stat-val--green">{lastEval ? formatNumber(lastEval.avg, 1) : "—"}</span>
@@ -419,6 +459,21 @@ export default function TrainPanel({ projectRoot, isRunning, isActive }) {
                 </LineChart>
               </ResponsiveContainer>
             </div>
+
+            {runAlgo === "dqn" && rewardData.length > 0 && (
+              <div className="card">
+                <div className="card-title">💰 Reward Per Game</div>
+                <ResponsiveContainer width="100%" height={200}>
+                  <LineChart data={rewardData}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(63,63,70,0.3)" />
+                    <XAxis dataKey="game" stroke="#64748b" tick={{ fontSize: 11 }} />
+                    <YAxis stroke="#64748b" tick={{ fontSize: 11 }} />
+                    <Tooltip {...CHART_STYLE} formatter={(val, name) => [formatNumber(val, 2), name]} />
+                    <Line type="monotone" dataKey="reward" stroke="#eab308" dot={false} strokeWidth={1.5} name="Reward" />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+            )}
           </div>
 
           {/* ── Collapsible Log ── */}

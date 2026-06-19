@@ -9,10 +9,15 @@ export default function ModelsPanel({ projectRoot, isActive }) {
   const [isLoading, setIsLoading] = useState(true);
   
   // Form State
+  const [algo, setAlgo] = useState("bc");
   const [runName, setRunName] = useState("my_model");
   const [lr, setLr] = useState("0.0005");
+  // Behavioral-cloning fields
   const [daggerProb, setDaggerProb] = useState("0.7");
   const [curriculumProb, setCurriculumProb] = useState("0.2");
+  // Reinforcement-learning (DQN) fields
+  const [gamma, setGamma] = useState("0.95");
+  const [warmstartEpisodes, setWarmstartEpisodes] = useState("50");
   
   const loadModels = async () => {
     if (!projectRoot) return;
@@ -54,14 +59,26 @@ export default function ModelsPanel({ projectRoot, isActive }) {
     e.preventDefault();
     if (!runName) return;
     
-    const args = [
-      "-u", "src/train_ai.py", 
-      "--init-only", 
-      "--run-name", runName,
-      "--lr", lr,
-      "--dagger-prob-max", daggerProb,
-      "--curriculum-prob", curriculumProb
-    ];
+    // Behavioral cloning (train_ai.py) and reinforcement learning (train_rl.py) are
+    // separate training methods with different hyperparameters and scripts.
+    const args = algo === "dqn"
+      ? [
+          "-u", "src/train_rl.py",
+          "--init-only",
+          "--algo", "dqn",
+          "--run-name", runName,
+          "--lr", lr,
+          "--gamma", gamma,
+          "--warmstart-episodes", warmstartEpisodes,
+        ]
+      : [
+          "-u", "src/train_ai.py", 
+          "--init-only", 
+          "--run-name", runName,
+          "--lr", lr,
+          "--dagger-prob-max", daggerProb,
+          "--curriculum-prob", curriculumProb
+        ];
     
     setIsLoading(true);
     await invoke("start_process", { id: "init_model", args, cwd: projectRoot });
@@ -110,6 +127,13 @@ export default function ModelsPanel({ projectRoot, isActive }) {
           <form onSubmit={handleCreate}>
             <div className="create-form-grid">
               <div className="form-group">
+                <label className="form-label">Training Method</label>
+                <select className="input" value={algo} onChange={e => setAlgo(e.target.value)}>
+                  <option value="bc">Behavioral Cloning (imitate teacher)</option>
+                  <option value="dqn">Reinforcement Learning (Double DQN)</option>
+                </select>
+              </div>
+              <div className="form-group">
                 <label className="form-label">Model Folder Name</label>
                 <input className="input" value={runName} onChange={e => setRunName(e.target.value)} required placeholder="e.g. big_network_test" />
               </div>
@@ -117,14 +141,29 @@ export default function ModelsPanel({ projectRoot, isActive }) {
                 <label className="form-label">Learning Rate</label>
                 <input className="input" type="number" step="0.0001" value={lr} onChange={e => setLr(e.target.value)} required />
               </div>
-              <div className="form-group">
-                <label className="form-label">DAgger Prob Max</label>
-                <input className="input" type="number" step="0.1" value={daggerProb} onChange={e => setDaggerProb(e.target.value)} required />
-              </div>
-              <div className="form-group">
-                <label className="form-label">Curriculum Prob</label>
-                <input className="input" type="number" step="0.1" value={curriculumProb} onChange={e => setCurriculumProb(e.target.value)} required />
-              </div>
+              {algo === "dqn" ? (
+                <>
+                  <div className="form-group">
+                    <label className="form-label">Gamma (discount)</label>
+                    <input className="input" type="number" step="0.01" value={gamma} onChange={e => setGamma(e.target.value)} required />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Warm-start Episodes</label>
+                    <input className="input" type="number" step="1" value={warmstartEpisodes} onChange={e => setWarmstartEpisodes(e.target.value)} required />
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="form-group">
+                    <label className="form-label">DAgger Prob Max</label>
+                    <input className="input" type="number" step="0.1" value={daggerProb} onChange={e => setDaggerProb(e.target.value)} required />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Curriculum Prob</label>
+                    <input className="input" type="number" step="0.1" value={curriculumProb} onChange={e => setCurriculumProb(e.target.value)} required />
+                  </div>
+                </>
+              )}
             </div>
             <div className="create-form-actions">
               <button type="button" className="btn btn--ghost" onClick={() => setIsCreating(false)}>Cancel</button>
@@ -150,7 +189,12 @@ export default function ModelsPanel({ projectRoot, isActive }) {
               <div className="model-card-accent" />
               <div className="model-card-body">
                 <div className="model-card-header">
-                  <span className="model-card-name">{m.name}</span>
+                  <span className="model-card-name">
+                    {m.name}
+                    <span className={`algo-badge algo-badge--${m.algo === "dqn" ? "rl" : "bc"}`}>
+                      {m.algo === "dqn" ? "RL · DQN" : "BC"}
+                    </span>
+                  </span>
                   <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
                     <span className="model-card-date">
                       {m.creation_date
