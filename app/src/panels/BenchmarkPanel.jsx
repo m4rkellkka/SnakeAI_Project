@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import EmptyState from "../components/EmptyState";
 import { formatCheckpoint } from "../utils";
 
 const RUNNING_RE = /^Running \d+ games for ([^\s]+)/;
@@ -20,6 +21,7 @@ export default function BenchmarkPanel({ projectRoot, isRunning, isActive }) {
   
   const [log, setLog]               = useState([]);
   const [results, setResults]       = useState([]);
+  const [logCollapsed, setLogCollapsed] = useState(false);
   
   const logBodyRef = useRef(null);
   const isUserScrolling = useRef(false);
@@ -136,6 +138,13 @@ export default function BenchmarkPanel({ projectRoot, isRunning, isActive }) {
 
   const completedResults = results.filter(r => r.complete);
 
+  const winRateColor = (rate) => {
+    const r = parseFloat(rate);
+    if (r >= 90) return "stat-val--green";
+    if (r >= 50) return "stat-val--orange";
+    return "stat-val--purple";
+  };
+
   return (
     <div className="panel">
       <div className="panel-header">
@@ -145,20 +154,21 @@ export default function BenchmarkPanel({ projectRoot, isRunning, isActive }) {
         </span>
       </div>
       <p className="panel-desc">
-        Run N games and get full score statistics: mean, median, std, win rate, stuck rate.
+        Run N games with seed-locked reproducibility and get full score distributions: mean, median, std, win rate, and stuck rate.
       </p>
 
+      {/* ── Config Form ── */}
       <div className="form-grid">
         <div className="form-group">
           <span className="form-label">Checkpoint</span>
-          <select className="input select" value={checkpoint} onChange={(e) => setCheckpoint(e.target.value)} disabled={isRunning}>
+          <select className="input" value={checkpoint} onChange={(e) => setCheckpoint(e.target.value)} disabled={isRunning}>
             {checkpointList.map(cp => <option key={cp} value={cp}>{formatCheckpoint(cp)}</option>)}
           </select>
         </div>
         <div className="form-group">
-          <span className="form-label">Compare with (Optional)</span>
-          <select className="input select" value={compareCheckpoint} onChange={(e) => setCompareCheckpoint(e.target.value)} disabled={isRunning}>
-            <option value="none">-- None --</option>
+          <span className="form-label">Compare with (optional)</span>
+          <select className="input" value={compareCheckpoint} onChange={(e) => setCompareCheckpoint(e.target.value)} disabled={isRunning}>
+            <option value="none">— None —</option>
             {checkpointList.map(cp => <option key={cp} value={cp}>{formatCheckpoint(cp)}</option>)}
           </select>
         </div>
@@ -186,6 +196,7 @@ export default function BenchmarkPanel({ projectRoot, isRunning, isActive }) {
         </div>
       </div>
 
+      {/* ── Controls ── */}
       <div className="controls">
         <button className="btn btn--primary" onClick={run} disabled={isRunning || !projectRoot}>
           ▶ Run Benchmark
@@ -195,30 +206,40 @@ export default function BenchmarkPanel({ projectRoot, isRunning, isActive }) {
         </button>
       </div>
 
+      {/* ── Results ── */}
       {completedResults.length > 0 && (
-        <div className="results-container" style={{ marginTop: "20px", marginBottom: "20px" }}>
-          <div className="benchmark-cards" style={{ display: "flex", gap: "16px", flexWrap: "wrap" }}>
+        <div className="benchmark-results">
+          <div className="benchmark-cards">
             {completedResults.map((r, i) => (
-              <div key={i} className="card" style={{ flex: 1, minWidth: "280px" }}>
-                <div className="card-title" style={{ color: "#fff", marginBottom: "16px" }}>
-                  {formatCheckpoint(r.checkpoint)}
+              <div key={i} className="card benchmark-result-card">
+                <div className="card-title">
+                  🏅 {formatCheckpoint(r.checkpoint)}
                 </div>
                 <div className="stats">
-                  <div className="stat">
-                    <span className="stat-label">Mean Score</span>
+                  <div className="stat stat--blue">
+                    <span className="stat-label">Mean</span>
                     <span className="stat-val stat-val--blue">{r.mean}</span>
+                    <span className="stat-hint">avg score</span>
                   </div>
                   <div className="stat">
-                    <span className="stat-label">Median Score</span>
+                    <span className="stat-label">Median</span>
                     <span className="stat-val">{r.median}</span>
+                    <span className="stat-hint">50th percentile</span>
                   </div>
                   <div className="stat">
-                    <span className="stat-label">Max Score</span>
+                    <span className="stat-label">Max</span>
                     <span className="stat-val">{r.max}</span>
+                    <span className="stat-hint">best game</span>
                   </div>
-                  <div className="stat">
+                  <div className="stat stat--green">
                     <span className="stat-label">Win Rate</span>
-                    <span className="stat-val stat-val--orange">{r.win_rate}%</span>
+                    <span className={`stat-val ${winRateColor(r.win_rate)}`}>{r.win_rate}%</span>
+                    <span className="stat-hint">score = 253</span>
+                  </div>
+                  <div className="stat stat--orange">
+                    <span className="stat-label">Stuck Rate</span>
+                    <span className="stat-val stat-val--orange">{r.stuck_rate}%</span>
+                    <span className="stat-hint">loop detected</span>
                   </div>
                 </div>
               </div>
@@ -227,15 +248,36 @@ export default function BenchmarkPanel({ projectRoot, isRunning, isActive }) {
         </div>
       )}
 
+      {/* ── Empty State ── */}
+      {completedResults.length === 0 && !isRunning && log.length === 0 && (
+        <EmptyState
+          icon="📊"
+          title="No benchmark results yet"
+          desc="Configure the parameters above and click 'Run Benchmark' to start evaluating your model."
+        />
+      )}
+
+      {/* ── Log ── */}
       {log.length > 0 && (
-        <div className="log-card">
-          <div className="log-head">
-            <span className="log-head-title">Output Log</span>
-            <button className="btn-link" onClick={() => { setLog([]); isUserScrolling.current = false; }}>Clear</button>
+        <div className={`log-card${logCollapsed ? ' log-card--collapsed' : ''}`} style={{ height: "280px" }}>
+          <div className="log-head" onClick={() => setLogCollapsed(!logCollapsed)}>
+            <div className="log-head-left">
+              <span className="log-head-toggle">▼</span>
+              <span className="log-head-title">Output Log</span>
+              <span className="log-head-count">{log.length} lines</span>
+            </div>
+            <button className="btn-link" onClick={(e) => { e.stopPropagation(); setLog([]); isUserScrolling.current = false; }}>Clear</button>
           </div>
-          <div className="log-body" ref={logBodyRef} onScroll={handleScroll}>
-            {log.map((l, i) => <div key={i} className={lineClass(l)}>{l}</div>)}
-          </div>
+          {!logCollapsed && (
+            <div className="log-body" ref={logBodyRef} onScroll={handleScroll}>
+              {log.map((l, i) => (
+                <div key={i} className={lineClass(l)}>
+                  <span className="log-line-icon">›</span>
+                  {l}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>

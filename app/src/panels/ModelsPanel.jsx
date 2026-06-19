@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import EmptyState from "../components/EmptyState";
 import { formatInteger, formatNumber } from "../utils";
 
 export default function ModelsPanel({ projectRoot, isActive }) {
@@ -53,7 +54,6 @@ export default function ModelsPanel({ projectRoot, isActive }) {
     e.preventDefault();
     if (!runName) return;
     
-    // Call init-only
     const args = [
       "-u", "src/train_ai.py", 
       "--init-only", 
@@ -66,7 +66,6 @@ export default function ModelsPanel({ projectRoot, isActive }) {
     setIsLoading(true);
     await invoke("start_process", { id: "init_model", args, cwd: projectRoot });
     
-    // Wait a brief moment for files to be written
     setTimeout(loadModels, 1500);
     setIsCreating(false);
     setRunName("");
@@ -77,7 +76,7 @@ export default function ModelsPanel({ projectRoot, isActive }) {
   const handleDelete = async (path, name) => {
     if (confirmDelete !== path) {
       setConfirmDelete(path);
-      setTimeout(() => setConfirmDelete(null), 3000); // Reset after 3 seconds
+      setTimeout(() => setConfirmDelete(null), 3000);
       return;
     }
     
@@ -94,23 +93,22 @@ export default function ModelsPanel({ projectRoot, isActive }) {
 
   return (
     <div className="panel">
-      <div className="panel-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <div>
-          <h2>Models Manager</h2>
-        </div>
+      <div className="panel-header models-header">
+        <h2>Models</h2>
         <button className="btn btn--primary" onClick={() => setIsCreating(true)} disabled={isCreating}>
           + Create New Model
         </button>
       </div>
       <p className="panel-desc">
-        Manage your neural network architectures and hyperparameter configurations.
+        Manage your neural network architectures and hyperparameter configurations. Each model has its own isolated folder under <code>model/</code>.
       </p>
 
+      {/* ── Create Form ── */}
       {isCreating && (
-        <div className="card" style={{ marginBottom: "20px", border: "1px solid #3b82f6" }}>
-          <div className="card-title">CREATE NEW MODEL</div>
-          <form onSubmit={handleCreate} style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px" }}>
+        <div className="card create-form-card">
+          <div className="card-title">✨ Create New Model</div>
+          <form onSubmit={handleCreate}>
+            <div className="create-form-grid">
               <div className="form-group">
                 <label className="form-label">Model Folder Name</label>
                 <input className="input" value={runName} onChange={e => setRunName(e.target.value)} required placeholder="e.g. big_network_test" />
@@ -128,7 +126,7 @@ export default function ModelsPanel({ projectRoot, isActive }) {
                 <input className="input" type="number" step="0.1" value={curriculumProb} onChange={e => setCurriculumProb(e.target.value)} required />
               </div>
             </div>
-            <div style={{ display: "flex", gap: "12px", justifyContent: "flex-end" }}>
+            <div className="create-form-actions">
               <button type="button" className="btn btn--ghost" onClick={() => setIsCreating(false)}>Cancel</button>
               <button type="submit" className="btn btn--primary">Create & Initialize</button>
             </div>
@@ -136,46 +134,55 @@ export default function ModelsPanel({ projectRoot, isActive }) {
         </div>
       )}
 
+      {/* ── Models Grid ── */}
       {isLoading ? (
-        <div style={{ padding: "40px", textAlign: "center", color: "#8b8b9a" }}>Loading models...</div>
+        <div className="loading-state">Loading models…</div>
       ) : models.length === 0 ? (
-        <div style={{ padding: "40px", textAlign: "center", color: "#8b8b9a" }}>No models found. Create one above!</div>
+        <EmptyState
+          icon="🧬"
+          title="No models yet"
+          desc="Create your first model above to begin training experiments with custom hyperparameters."
+        />
       ) : (
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "20px" }}>
+        <div className="models-grid">
           {models.map(m => (
-            <div key={m.path} className="card" style={{ display: "flex", flexDirection: "column", gap: "12px", position: "relative" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <div className="card-title" style={{ fontSize: "16px", color: "#fff", margin: 0 }}>{m.name}</div>
-                <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-                  <div style={{ fontSize: "12px", color: "#8b8b9a" }}>
-                    {m.creation_date ? new Date(m.creation_date * 1000).toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit", year: "numeric" }) : "Unknown Date"}
-                  </div>
-                  <button 
-                    onClick={() => handleDelete(m.path, m.name)}
-                    style={{ background: "transparent", border: "none", cursor: "pointer", fontSize: "16px", padding: "4px", borderRadius: "4px", color: confirmDelete === m.path ? "#ef4444" : "inherit" }}
-                    title="Delete model"
-                    className="btn-link"
-                  >
-                    {confirmDelete === m.path ? "Sure?" : "❌"}
-                  </button>
-                </div>
-              </div>
-              
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px", background: "rgba(0,0,0,0.2)", padding: "12px", borderRadius: "8px" }}>
-                <div>
-                  <div style={{ fontSize: "11px", color: "#8b8b9a", textTransform: "uppercase" }}>Games Trained</div>
-                  <div style={{ fontSize: "20px", fontWeight: "bold", color: "#e4e4e7" }}>{formatInteger(m.n_games || 0)}</div>
-                </div>
-                <div>
-                  <div style={{ fontSize: "11px", color: "#8b8b9a", textTransform: "uppercase" }}>Best Eval Avg</div>
-                  <div style={{ fontSize: "20px", fontWeight: "bold", color: "#10b981" }}>
-                    {m.eval_avg_history?.length > 0 ? formatNumber(Math.max(...m.eval_avg_history), 1) : "--"}
+            <div key={m.path} className="model-card">
+              <div className="model-card-accent" />
+              <div className="model-card-body">
+                <div className="model-card-header">
+                  <span className="model-card-name">{m.name}</span>
+                  <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+                    <span className="model-card-date">
+                      {m.creation_date
+                        ? new Date(m.creation_date * 1000).toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit", year: "numeric" })
+                        : "Unknown"}
+                    </span>
+                    <button
+                      onClick={() => handleDelete(m.path, m.name)}
+                      className={`btn-delete${confirmDelete === m.path ? ' btn-delete--confirm' : ''}`}
+                      title="Delete model"
+                    >
+                      {confirmDelete === m.path ? "Sure?" : "🗑"}
+                    </button>
                   </div>
                 </div>
-              </div>
-              
-              <div style={{ fontSize: "13px", color: "#8b8b9a" }}>
-                <code style={{ background: "rgba(0,0,0,0.3)", padding: "2px 6px", borderRadius: "4px" }}>{m.path}</code>
+                
+                <div className="model-card-stats">
+                  <div>
+                    <div className="model-card-stat-label">Games Trained</div>
+                    <div className="model-card-stat-value model-card-stat-value--white">{formatInteger(m.n_games || 0)}</div>
+                  </div>
+                  <div>
+                    <div className="model-card-stat-label">Best Eval Avg</div>
+                    <div className="model-card-stat-value model-card-stat-value--green">
+                      {m.eval_avg_history?.length > 0 ? formatNumber(Math.max(...m.eval_avg_history), 1) : "--"}
+                    </div>
+                  </div>
+                </div>
+                
+                <div className="model-card-path">
+                  <code>{m.path}</code>
+                </div>
               </div>
             </div>
           ))}
