@@ -21,6 +21,7 @@ def main():
             'eval_games_history': checkpoint.get('eval_games_history', []),
             'eval_avg_history': checkpoint.get('eval_avg_history', []),
             'eval_max_history': checkpoint.get('eval_max_history', []),
+            'eval_stuck_history': checkpoint.get('eval_stuck_history', []),
             'loss_history': checkpoint.get('loss_history', []),
             'mean_loss_history': checkpoint.get('mean_loss_history', []),
             'score_history': checkpoint.get('score_history', []),

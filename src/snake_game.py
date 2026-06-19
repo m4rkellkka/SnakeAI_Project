@@ -214,7 +214,7 @@ class SnakeGameAI:
         self.foods = []
         self._place_food(self.num_apples)
         self.frame_iteration = 0
-        self.visited_since_food = set()  # (gx, gy) grid coords of head positions since last food
+        self.visited_since_food = {}  # (gx, gy) grid coords -> visit count since last food
 
     def _place_food(self, count):
         # Collect all free cells (not occupied by snake or existing food),
@@ -254,7 +254,8 @@ class SnakeGameAI:
 
         # 2. Move
         self._move(action) # Updates self.head
-        self.visited_since_food.add((self.head.x // BLOCK_SIZE, self.head.y // BLOCK_SIZE))
+        _cell = (self.head.x // BLOCK_SIZE, self.head.y // BLOCK_SIZE)
+        self.visited_since_food[_cell] = self.visited_since_food.get(_cell, 0) + 1
 
         # If food is not eaten, the tail leaves its cell on THIS same step —
         # this is why safe_moves() considers moving into the current tail cell safe.
