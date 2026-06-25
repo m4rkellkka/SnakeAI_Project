@@ -138,7 +138,9 @@ class DuelingSnakeNet(nn.Module):
 
 # --- Replay buffer (5-tuples) ---
 class RLReplayBuffer:
-    """Ring buffer of (state, action_idx, reward, next_state, done) for off-policy DQN."""
+    """Ring buffer of (state, action_idx, reward, next_state, done, next_safe) for
+    off-policy DQN. `next_safe` is the safe-move mask of next_state, stored so the
+    Double-DQN target can mask its action selection the same way the behavior policy does."""
 
     def __init__(self, capacity):
         self.capacity = capacity
@@ -148,8 +150,8 @@ class RLReplayBuffer:
     def __len__(self):
         return len(self.buffer)
 
-    def push(self, state, action_idx, reward, next_state, done):
-        item = (state, action_idx, reward, next_state, done)
+    def push(self, state, action_idx, reward, next_state, done, next_safe):
+        item = (state, action_idx, reward, next_state, done, next_safe)
         if len(self.buffer) < self.capacity:
             self.buffer.append(item)
         else:
@@ -158,8 +160,8 @@ class RLReplayBuffer:
 
     def sample(self, batch_size):
         batch = random.sample(self.buffer, batch_size)
-        states, actions, rewards, next_states, dones = zip(*batch)
-        return states, actions, rewards, next_states, dones
+        states, actions, rewards, next_states, dones, next_safes = zip(*batch)
+        return states, actions, rewards, next_states, dones, next_safes
 
 
 # --- DQN agent ---
@@ -186,7 +188,8 @@ class DQNAgent:
         self.eval_avg_history = []
         self.eval_max_history = []
         self.eval_stuck_history = []
-        self.reward_history = []      # mean per-step reward per game
+        self.reward_history = []      # total reward per episode
+        self.score_history = []       # final score per training game
         self.loss_history = []
 
     def get_state(self, game):
@@ -215,20 +218,29 @@ class DQNAgent:
     def train_step(self):
         if len(self.memory) < BATCH_SIZE:
             return None
-        states, actions, rewards, next_states, dones = self.memory.sample(BATCH_SIZE)
+        states, actions, rewards, next_states, dones, next_safes = self.memory.sample(BATCH_SIZE)
 
         states = torch.tensor(np.array(states), dtype=torch.float)
         next_states = torch.tensor(np.array(next_states), dtype=torch.float)
         actions = torch.tensor(actions, dtype=torch.long).unsqueeze(1)
         rewards = torch.tensor(rewards, dtype=torch.float).unsqueeze(1)
         dones = torch.tensor(dones, dtype=torch.float).unsqueeze(1)
+        next_safe = torch.tensor(np.array(next_safes), dtype=torch.bool)  # (B, 3)
 
         # Q(s,a) for the actions actually taken
         q = self.model(states).gather(1, actions)
 
-        # Double DQN target: action chosen by ONLINE net, evaluated by TARGET net
+        # Double DQN target: action chosen by ONLINE net, evaluated by TARGET net.
+        # The action selection is masked by next_state's safe moves — the behavior
+        # policy never takes unsafe moves, so their Q-values are never grounded by real
+        # samples; an unmasked argmax could latch onto an inflated unsafe-action Q and
+        # blow up the target. Rows with no safe move keep all actions (avoids an
+        # all -inf argmax); their target is zeroed by (1 - done) anyway.
         with torch.no_grad():
-            next_actions = self.model(next_states).argmax(dim=1, keepdim=True)
+            next_q_online = self.model(next_states)
+            has_safe = next_safe.any(dim=1, keepdim=True)
+            next_q_online = next_q_online.masked_fill(~next_safe & has_safe, float('-inf'))
+            next_actions = next_q_online.argmax(dim=1, keepdim=True)
             next_q = self.target(next_states).gather(1, next_actions)
             target_q = rewards + GAMMA * next_q * (1.0 - dones)
 
@@ -283,6 +295,7 @@ class DQNAgent:
         self.eval_max_history = checkpoint.get('eval_max_history', [])
         self.eval_stuck_history = checkpoint.get('eval_stuck_history', [])
         self.reward_history = checkpoint.get('reward_history', [])
+        self.score_history = checkpoint.get('score_history', [])
         self.loss_history = checkpoint.get('loss_history', [])
 
         if load_optimizer and 'optimizer_state_dict' in checkpoint:
@@ -424,7 +437,6 @@ def train(headless=True, load_cp='checkpoint_last.pth', warmstart_episodes=0,
     prev_dist = nearest_food_dist(game)
     prev_score = game.score
     ep_reward = 0.0
-    ep_steps = 0
     ep_loss = 0.0
     ep_batches = 0
 
@@ -437,13 +449,14 @@ def train(headless=True, load_cp='checkpoint_last.pth', warmstart_episodes=0,
         reward = compute_reward(ate, done, outcome, prev_dist, new_dist)
         if done:
             next_state = np.zeros_like(state)
+            next_safe = (True, True, True)  # unused: target is zeroed by (1 - done)
         else:
             next_state = agent.get_state(game)
+            next_safe = tuple(game.safe_moves())  # safe mask for next_state
 
-        agent.memory.push(state, action_idx, reward, next_state, float(done))
+        agent.memory.push(state, action_idx, reward, next_state, float(done), next_safe)
         agent.total_steps += 1
         ep_reward += reward
-        ep_steps += 1
 
         if agent.total_steps % TRAIN_EVERY_N_STEPS == 0:
             loss = agent.train_step()
@@ -463,6 +476,7 @@ def train(headless=True, load_cp='checkpoint_last.pth', warmstart_episodes=0,
             # Total episode reward — same metric the log line prints, so the UI chart
             # is continuous across disk-loaded history and live-streamed points.
             agent.reward_history.append(round(ep_reward, 2))
+            agent.score_history.append(score)
             agent.loss_history.append(avg_loss)
 
             print(f'Game: {agent.n_games} | Score: {score} | Loss: {avg_loss:.4f} | '
@@ -494,6 +508,7 @@ def train(headless=True, load_cp='checkpoint_last.pth', warmstart_episodes=0,
                     eval_max_history=agent.eval_max_history,
                     eval_stuck_history=agent.eval_stuck_history,
                     reward_history=agent.reward_history[-2000:],
+                    score_history=agent.score_history[-2000:],
                     loss_history=agent.loss_history[-2000:],
                 )
 
@@ -505,7 +520,6 @@ def train(headless=True, load_cp='checkpoint_last.pth', warmstart_episodes=0,
             prev_dist = nearest_food_dist(game)
             prev_score = game.score
             ep_reward = 0.0
-            ep_steps = 0
             ep_loss = 0.0
             ep_batches = 0
 
