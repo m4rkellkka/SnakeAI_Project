@@ -242,7 +242,13 @@ export default function App() {
         </aside>
 
         <main className="main">
-          <StatusBar activePanel={panel} running={runningMap} projectRoot={projectRoot} />
+          <StatusBar
+            activePanel={panel}
+            running={runningMap}
+            runningList={running}
+            projectRoot={projectRoot}
+            onNavigate={setPanel}
+          />
 
           <div className="main-content">
             <div style={{ display: panel === "train" ? "block" : "none" }}>

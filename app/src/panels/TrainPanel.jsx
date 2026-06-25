@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
 import EmptyState from "../components/EmptyState";
+import AnimatedNumber from "../components/AnimatedNumber";
 import { formatCheckpoint, formatNumber, formatInteger } from "../utils";
 import { usePersistedState, readPersisted, writePersisted, removePersisted } from "../hooks/usePersistedState";
 
@@ -34,7 +35,10 @@ export default function TrainPanel({ projectRoot, isRunning, isActive }) {
   const [lastGame, setLastGame] = useState(() => readPersisted("train:lastGame", null));
   const [lastEval, setLastEval] = useState(() => readPersisted("train:lastEval", null));
   const [logCollapsed, setLogCollapsed] = usePersistedState("train:logCollapsed", false);
+  // Training method ("bc"|"dqn") and hyperparameters of the selected/active run,
+  // read from fetch_history — drive labels, which script launches, and the run-info chips.
   const [runAlgo, setRunAlgo] = useState("bc");
+  const [runConfig, setRunConfig] = useState({});
 
   const [checkpointList, setCheckpointList] = useState(["checkpoint_last.pth"]);
   const [loadCheckpoint, setLoadCheckpoint] = usePersistedState("train:loadCheckpoint", "checkpoint_last.pth");
@@ -87,18 +91,21 @@ export default function TrainPanel({ projectRoot, isRunning, isActive }) {
       const newGameData = [];
       const newRewardData = [];
       
-      if (hist.algo) {
-        setRunAlgo(hist.algo);
-      } else {
-        setRunAlgo("bc");
-      }
-      
-      if (hist.loss_history && hist.mean_loss_history) {
+      setRunAlgo(hist.algo || "bc");
+      setRunConfig(hist.run_config || {});
+
+      // BC ships a precomputed mean_loss_history; RL doesn't, so fall back to a
+      // running mean of loss_history. Either way both charts get a smooth mean line.
+      if (hist.loss_history) {
+        const hasMean = hist.mean_loss_history?.length === hist.loss_history.length;
+        let runSum = 0;
         for (let i = 0; i < hist.loss_history.length; i++) {
+          const loss = hist.loss_history[i];
+          runSum += loss;
           newLossData.push({
             game: i + 1,
-            loss: hist.loss_history[i],
-            meanLoss: hist.mean_loss_history[i]
+            loss,
+            meanLoss: hasMean ? hist.mean_loss_history[i] : runSum / (i + 1),
           });
         }
       }
@@ -284,7 +291,9 @@ export default function TrainPanel({ projectRoot, isRunning, isActive }) {
     lossMeanRef.current = { sum: 0, count: 0 };
     isUserScrolling.current = false;
     
-    const args = ["-u", runAlgo === "dqn" ? "src/train_rl.py" : "src/train_ai.py"];
+    const isRL = runAlgo === "dqn";
+    const args = ["-u", isRL ? "src/train_rl.py" : "src/train_ai.py"];
+    if (isRL) args.push("--algo", "dqn");
 
     // Default run writes to model/checkpoint_last.pth; a named run writes to
     // model/<run-name>/checkpoint_last.pth. Remember whichever it is so a reload
@@ -302,6 +311,25 @@ export default function TrainPanel({ projectRoot, isRunning, isActive }) {
       } else {
         args.push("--load-checkpoint", parts[0]);
       }
+    }
+
+    // Carry the run's configured hyperparameters through to the real training run.
+    // The create-form only passes them to `--init-only` (which writes an empty
+    // checkpoint and exits); without re-passing them here they'd silently revert to
+    // the trainer's module defaults instead of what the user chose at creation.
+    if (isRL) {
+      if (runConfig?.lr != null) args.push("--lr", String(runConfig.lr));
+      if (runConfig?.gamma != null) args.push("--gamma", String(runConfig.gamma));
+      // Warm-start (teacher pre-fills the replay buffer) only matters on a fresh run —
+      // the trainer ignores it once n_games > 0.
+      args.push("--warmstart-episodes", String(runConfig?.warmstart_episodes ?? 50));
+      if (runConfig?.teacher_bias === false) args.push("--no-teacher-bias");
+    } else {
+      if (runConfig?.lr != null) args.push("--lr", String(runConfig.lr));
+      if (runConfig?.dagger_prob_max != null)
+        args.push("--dagger-prob-max", String(runConfig.dagger_prob_max));
+      if (runConfig?.curriculum_prob != null)
+        args.push("--curriculum-prob", String(runConfig.curriculum_prob));
     }
 
     setActiveRun(activeCheckpointPath);
@@ -325,13 +353,39 @@ export default function TrainPanel({ projectRoot, isRunning, isActive }) {
 
   const hasData = lastGame || lastEval || gameData.length > 0;
 
+  // Hyperparameter chips for the selected/active run, so it's clear what will train
+  // (and, for RL, that the teacher warm-start is wired in).
+  const runChips = runAlgo === "dqn"
+    ? [
+        { label: "method", value: "Double DQN", hint: "Self-learning from a reward signal (no per-step teacher label)." },
+        { label: "lr", value: runConfig?.lr ?? "—", hint: "Adam learning rate." },
+        { label: "γ", value: runConfig?.gamma ?? "—", hint: "Discount factor — how much future reward counts vs. immediate." },
+        { label: "warm-start", value: `${runConfig?.warmstart_episodes ?? 50} ep`,
+          hint: "Teacher pre-fills the replay buffer with this many episodes to bootstrap learning. Only applies to a fresh run." },
+        { label: "teacher bias", value: runConfig?.teacher_bias === false ? "off" : "on",
+          hint: "On: early exploration is teacher-guided then decays. Off: purely random exploration." },
+      ]
+    : [
+        { label: "method", value: "Behavioral Cloning", hint: "Imitates the Hamiltonian-cycle teacher via supervised loss." },
+        { label: "lr", value: runConfig?.lr ?? "—", hint: "Adam learning rate." },
+        { label: "DAgger max", value: runConfig?.dagger_prob_max ?? "—",
+          hint: "Max probability the network (not teacher) drives a step — fixes train/play distribution shift." },
+        { label: "curriculum", value: runConfig?.curriculum_prob ?? "—",
+          hint: "Probability a training episode starts from a long-snake (late-game) state." },
+      ];
+
   return (
     <div className="panel">
       <div className="panel-header">
         <h2>Training</h2>
-        <span className={`badge ${isRunning ? "badge--running" : "badge--idle"}`}>
-          {isRunning ? "● Running" : "○ Idle"}
-        </span>
+        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+          <span className={`algo-badge algo-badge--${runAlgo === "dqn" ? "rl" : "bc"}`}>
+            {runAlgo === "dqn" ? "RL · DQN" : "BC"}
+          </span>
+          <span className={`badge ${isRunning ? "badge--running" : "badge--idle"}`}>
+            {isRunning ? "● Running" : "○ Idle"}
+          </span>
+        </div>
       </div>
       <p className="panel-desc">
         {runAlgo === "dqn" 
@@ -348,7 +402,7 @@ export default function TrainPanel({ projectRoot, isRunning, isActive }) {
         </button>
         
         <div className="form-group form-group--inline" style={{ marginLeft: "8px" }}>
-          <span className="form-label">Resume from:</span>
+          <span className="form-label">Model / resume from:</span>
           <select 
             className="input" 
             value={loadCheckpoint} 
@@ -361,40 +415,74 @@ export default function TrainPanel({ projectRoot, isRunning, isActive }) {
         </div>
       </div>
 
+      {/* ── Selected run hyperparameters ── */}
+      <div className="run-chips">
+        {runChips.map(c => (
+          <span key={c.label} className="run-chip" title={c.hint}>
+            <span className="run-chip-key">{c.label}</span>
+            <span className="run-chip-val">{c.value}</span>
+          </span>
+        ))}
+      </div>
+
       {/* ── Stats Row ── */}
       {hasData && (
         <div className="stats">
           <div className="stat stat--blue">
             <span className="stat-label">Game</span>
-            <span className="stat-val stat-val--blue">{lastGame?.game ?? "—"}</span>
+            <AnimatedNumber
+              className="stat-val stat-val--blue"
+              value={lastGame?.game}
+              format={(n) => Math.round(n).toString()}
+            />
             <span className="stat-hint">Episodes played</span>
           </div>
           <div className="stat stat--purple">
             <span className="stat-label">Loss</span>
-            <span className="stat-val stat-val--purple">{lastGame?.loss?.toFixed(4) ?? "—"}</span>
-            <span className="stat-hint">Cross-entropy</span>
+            <AnimatedNumber
+              className="stat-val stat-val--purple"
+              value={lastGame?.loss}
+              format={(n) => n.toFixed(4)}
+            />
+            <span className="stat-hint">{runAlgo === "dqn" ? "TD error (Huber)" : "Cross-entropy"}</span>
           </div>
           {runAlgo === "dqn" && (
             <div className="stat stat--yellow">
               <span className="stat-label">Reward</span>
-              <span className="stat-val stat-val--yellow">{lastGame?.reward?.toFixed(1) ?? "—"}</span>
+              <AnimatedNumber
+                className="stat-val stat-val--yellow"
+                value={lastGame?.reward}
+                format={(n) => n.toFixed(1)}
+              />
               <span className="stat-hint">Episode total</span>
             </div>
           )}
           <div className="stat stat--green">
             <span className="stat-label">Eval Avg</span>
-            <span className="stat-val stat-val--green">{lastEval ? formatNumber(lastEval.avg, 1) : "—"}</span>
+            <AnimatedNumber
+              className="stat-val stat-val--green"
+              value={lastEval?.avg}
+              format={(n) => formatNumber(n, 1)}
+            />
             <span className="stat-hint">Honest evaluation</span>
           </div>
           <div className="stat stat--orange">
             <span className="stat-label">Steps</span>
-            <span className="stat-val stat-val--orange">{lastGame ? formatInteger(lastGame.steps) : "—"}</span>
+            <AnimatedNumber
+              className="stat-val stat-val--orange"
+              value={lastGame?.steps}
+              format={(n) => formatInteger(Math.round(n))}
+            />
             <span className="stat-hint">Total env steps</span>
           </div>
           {lastEval && (
             <div className="stat stat--cyan">
               <span className="stat-label">Eval Max</span>
-              <span className="stat-val stat-val--cyan">{lastEval.max}</span>
+              <AnimatedNumber
+                className="stat-val stat-val--cyan"
+                value={lastEval.max}
+                format={(n) => Math.round(n).toString()}
+              />
               <span className="stat-hint">Best single game</span>
             </div>
           )}
@@ -433,7 +521,7 @@ export default function TrainPanel({ projectRoot, isRunning, isActive }) {
             )}
 
             <div className="card">
-              <div className="card-title">📉 Loss & Mean Loss</div>
+              <div className="card-title">📉 {runAlgo === "dqn" ? "TD Loss (Huber)" : "Loss & Mean Loss"}</div>
               <ResponsiveContainer width="100%" height={200}>
                 <LineChart data={lossData.slice(-600)}>
                   <CartesianGrid strokeDasharray="3 3" stroke="rgba(63,63,70,0.3)" />
