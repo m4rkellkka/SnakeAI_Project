@@ -24,8 +24,10 @@ export default defineConfig(async () => ({
         }
       : undefined,
     watch: {
-      // 3. tell Vite to ignore watching `src-tauri`
-      ignored: ["**/src-tauri/**"],
+      // 3. tell Vite to ignore watching `src-tauri`, plus training outputs the
+      //    Python process writes (checkpoints / plots) — defensive against any
+      //    path that could fall inside the watch root and force a full reload.
+      ignored: ["**/src-tauri/**", "**/model/**", "**/*.pth", "**/*.png"],
     },
   },
 }));

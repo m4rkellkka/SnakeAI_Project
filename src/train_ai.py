@@ -10,14 +10,20 @@ import numpy as np
 import matplotlib
 matplotlib.use('Agg')  # No GUI — compatible with Pygame on macOS
 import matplotlib.pyplot as plt
-from snake_game import SnakeGameAI, Direction, BLOCK_SIZE, GRID_SIZE
+from snake_game import SnakeGameAI, GRID_SIZE
 from teacher import get_best_move
+from state_encoding import encode_state
 
 # On multi-core Macs, torch defaults to using all cores (8–10) for convolutions,
 # which starves Pygame's event loop during training. The network is small, so
 # 2 threads have minimal training impact but huge responsiveness gain.
 TORCH_THREADS = 2
 torch.set_num_threads(TORCH_THREADS)
+
+# Headless training (the default) has no Pygame event loop to starve, so torch can use
+# more cores. Applied in train() once `headless` is known; the import-time default above
+# stays at 2 for watch/benchmark, which may run alongside a visible Pygame window.
+TORCH_THREADS_HEADLESS = max(2, (os.cpu_count() or 4) - 1)
 
 # --- Settings ---
 NUM_APPLES = 1
@@ -26,6 +32,20 @@ BATCH_SIZE = 128
 LR = 0.0005
 TRAIN_EVERY_N_STEPS = 16
 GRAD_CLIP_NORM = 10
+
+# The 10-channel state encoding (and VISIT_COUNT_CAP) now lives in state_encoding.py,
+# shared with the RL trainer (train_rl.py). Agent.get_state calls encode_state().
+
+# Teacher labels are heavily skewed toward "straight"; turns (where loops form) are
+# under-represented, so they get under-trained. Mildly up-weight the two turn classes in
+# the CrossEntropy loss. Kept conservative on purpose — full inverse-frequency weighting
+# over-emphasizes rare turns and risks regressing the well-tuned honest score.
+# Pareto-tuned: softened from [1.0, 2.5, 2.5]. At 2.5 the turn bias eroded the dominant
+# "straight" precision the Hamiltonian cycle depends on, capping the honest avg via
+# mid-length collisions (~227 honest vs ~234 with no weighting). 1.5 is the midpoint
+# between neutral [1,1,1] (avg ~234, but ~20% loop-stuck) and [1,2.5,2.5] (avg ~227,
+# ~0% stuck) — aiming to recover the avg without bringing looping back.
+CE_CLASS_WEIGHTS = [1.0, 1.5, 1.5]  # [straight, right, left]
 
 # DAgger-lite: with this probability, the network (not the teacher) takes an
 # environment step — but the teacher's label is always used for training.
@@ -40,6 +60,15 @@ GRAD_CLIP_NORM = 10
 DAGGER_PROB_MAX = 0.7
 DAGGER_RAMP_STEPS = 100_000
 
+# In-training loop handling: when a DAgger-driven episode revisits a (head, direction)
+# since the last apple, the network is stuck in a loop. Rather than immediately handing
+# control to the teacher (which truncated the loop and starved the buffer of the very
+# deep-loop states the network fails on), let the network keep driving for up to this
+# many looping steps — those states are still labeled with the teacher's action, so the
+# buffer learns "deep in a loop, here is the way out" — then force the teacher to break
+# out. The budget caps the inflow so loop states don't flood the buffer.
+DAGGER_LOOP_BUDGET = 40
+
 # Curriculum: with this probability (only after CURRICULUM_START_GAMES games),
 # a new episode starts with a long snake via game.reset(start_length=...) —
 # the network sees "late-game" states early rather than waiting to reach them.
@@ -52,11 +81,17 @@ CURRICULUM_MAX_LEN = 50
 # the teacher (greedy network only) — this is the true learned skill, unlike
 # training-game scores (almost always driven by the teacher).
 # EVAL_GAMES=5 has huge variance (std ~25–28, mean error ~12); 15 games reduces
-# this to ~7, so "new record" in checkpoint_best.pth isn't just luck.
+# this to ~7. Raised to 30 (mean error ~5): at 15 the avg still swung ±35 between
+# evals (e.g. the game-125 dip to 23.4 was almost certainly a noise spike), too noisy
+# to trust checkpoint_best selection or to compare runs on a ~7-point Pareto difference.
 EVAL_EVERY_N_GAMES = 25
-EVAL_GAMES = 15
+EVAL_GAMES = 30
+# Fixed seed for honest eval so checkpoint_best.pth is selected on a paired, repeatable
+# game set rather than a lucky/unlucky random draw. evaluate() saves and restores the
+# global RNG state around this so training's own randomness is unaffected.
+EVAL_SEED = 1234
 
-SAVE_EVERY_N_GAMES = 10
+SAVE_EVERY_N_GAMES = 5
 MODEL_FOLDER = './model'
 PLOT_EVERY_N_GAMES = 10
 
@@ -66,8 +101,8 @@ def dagger_prob(total_steps):
 
 
 # --- Plots ---
-def plot(eval_games, eval_avg, eval_max, losses, mean_losses, output_path='learning_curve.png'):
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(8, 8))
+def plot(eval_games, eval_avg, eval_max, eval_stuck, losses, mean_losses, output_path='learning_curve.png'):
+    fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(8, 11))
 
     ax1.set_title('Honest Evaluation (no teacher, greedy)')
     ax1.set_xlabel('Games Played')
@@ -78,13 +113,23 @@ def plot(eval_games, eval_avg, eval_max, losses, mean_losses, output_path='learn
         ax1.legend(loc='upper left')
     ax1.set_ylim(ymin=0)
 
-    ax2.set_title('Training Loss (CrossEntropy)')
+    # The real progress metric for the looping problem: fraction of honest-eval games that
+    # ended in a loop-timeout. Target is to drive this toward 0 (no need for the unstick crutch).
+    ax2.set_title('Honest Stuck-Rate (loop-timeouts, no teacher)')
     ax2.set_xlabel('Games Played')
-    ax2.set_ylabel('Loss')
-    ax2.plot(losses, label='Loss per game', alpha=0.3, color='red')
-    ax2.plot(mean_losses, label='Average Loss', color='darkred', linewidth=2)
-    ax2.set_ylim(ymin=0)
-    ax2.legend(loc='upper right')
+    ax2.set_ylabel('Stuck Rate')
+    if eval_games:
+        ax2.plot(eval_games, eval_stuck, label='Stuck rate', color='purple')
+        ax2.legend(loc='upper right')
+    ax2.set_ylim(0, 1)
+
+    ax3.set_title('Training Loss (CrossEntropy)')
+    ax3.set_xlabel('Games Played')
+    ax3.set_ylabel('Loss')
+    ax3.plot(losses, label='Loss per game', alpha=0.3, color='red')
+    ax3.plot(mean_losses, label='Average Loss', color='darkred', linewidth=2)
+    ax3.set_ylim(ymin=0)
+    ax3.legend(loc='upper right')
 
     fig.tight_layout()
     fig.savefig(output_path)
@@ -94,7 +139,8 @@ def plot(eval_games, eval_avg, eval_max, losses, mean_losses, output_path='learn
 # --- Neural Network ---
 class SnakeNet(nn.Module):
     """CNN classifier: predicts teacher action [straight, right, left]
-    from a 9-channel grid view (channels 0–4 egocentric, channels 5–8 absolute direction).
+    from a 10-channel grid view (channels 0–5 egocentric, channels 6–9 absolute direction).
+    Channel 5 is a normalized visit-count map (loop-detection signal).
 
     Compass fix: direction is encoded separately (absolute, not rotated) so the network
     can distinguish cycle turns that depend on absolute column parity vs. just local
@@ -148,7 +194,9 @@ class Trainer:
     def __init__(self, model, lr):
         self.model = model
         self.optimizer = optim.Adam(model.parameters(), lr=lr)
-        self.criterion = nn.CrossEntropyLoss()
+        # Up-weight turn classes so the (rare but loop-critical) turn decisions aren't
+        # drowned out by the dominant "straight" label — see CE_CLASS_WEIGHTS.
+        self.criterion = nn.CrossEntropyLoss(weight=torch.tensor(CE_CLASS_WEIGHTS, dtype=torch.float))
 
     def train_step(self, states, actions):
         states = torch.tensor(np.array(states), dtype=torch.float)
@@ -181,67 +229,14 @@ class Agent:
         self.eval_games_history = []
         self.eval_avg_history = []
         self.eval_max_history = []
+        self.eval_stuck_history = []
         self.loss_history = []
         self.mean_loss_history = []
         self.score_history = []
 
     def get_state(self, game):
-        state = np.zeros((10, GRID_SIZE, GRID_SIZE), dtype=np.float32)
-
-        # Channels 0–4: head, body, food, danger, fullness (before rotation, absolute coords)
-
-        # Channel 0: head
-        head = game.snake[0]
-        hx, hy = head.x // BLOCK_SIZE, head.y // BLOCK_SIZE
-        state[0, hy, hx] = 1.0
-
-        # Channel 1: body
-        for pt in game.snake[1:]:
-            bx, by = pt.x // BLOCK_SIZE, pt.y // BLOCK_SIZE
-            state[1, by, bx] = 1.0
-
-        # Channel 2: food
-        for f in game.foods:
-            fx, fy = f.x // BLOCK_SIZE, f.y // BLOCK_SIZE
-            state[2, fy, fx] = 1.0
-
-        # Channel 3: danger map — border ring (walls) + body cells
-        state[3, 0, :] = 1.0
-        state[3, -1, :] = 1.0
-        state[3, :, 0] = 1.0
-        state[3, :, -1] = 1.0
-        for pt in game.snake[1:]:
-            bx, by = pt.x // BLOCK_SIZE, pt.y // BLOCK_SIZE
-            state[3, by, bx] = 1.0
-
-        # Channel 4: board fullness
-        state[4, :, :] = len(game.snake) / (GRID_SIZE ** 2)
-
-        # Channel 5: cells visited since last food (egocentric — rotated with 0–4).
-        # Gives the network direct information about its recent path, letting it
-        # detect and avoid loops without inference-time crutches.
-        for (vx, vy) in game.visited_since_food:
-            state[5, vy, vx] = 1.0
-
-        # Channels 6–9: absolute direction (one-hot, not rotated!)
-        # Compass fix: direction is encoded separately (absolute, not egocentric).
-        # This lets the network distinguish cycle turns that depend on absolute
-        # position (even/odd columns in the serpentine grid), not just local patterns.
-        dir_idx = [Direction.UP, Direction.LEFT, Direction.DOWN, Direction.RIGHT].index(game.direction)
-        state[6 + dir_idx, :, :] = 1.0
-
-        # Egocentric view for channels 0–5: rotate so head faces "up".
-        # Channel 5 (visited) is positional, so it rotates with the egocentric block.
-        # Channels 6–9 (direction) remain in absolute coordinates.
-        if game.direction == Direction.RIGHT:
-            state[:6] = np.rot90(state[:6], k=1, axes=(1, 2))
-        elif game.direction == Direction.DOWN:
-            state[:6] = np.rot90(state[:6], k=2, axes=(1, 2))
-        elif game.direction == Direction.LEFT:
-            state[:6] = np.rot90(state[:6], k=3, axes=(1, 2))
-
-        # rot90 returns a view with negative strides — copy it for PyTorch compatibility.
-        return state.copy()
+        # The 10-channel encoding is shared with the RL trainer — see state_encoding.py.
+        return encode_state(game)
 
     def get_network_action(self, state, game):
         """Forward pass through network + masking by safe_moves().
@@ -292,6 +287,7 @@ class Agent:
         self.eval_games_history = checkpoint.get('eval_games_history', [])
         self.eval_avg_history = checkpoint.get('eval_avg_history', [])
         self.eval_max_history = checkpoint.get('eval_max_history', [])
+        self.eval_stuck_history = checkpoint.get('eval_stuck_history', [])
         self.loss_history = checkpoint.get('loss_history', [])
         self.mean_loss_history = checkpoint.get('mean_loss_history', [])
         self.score_history = checkpoint.get('score_history', [])
@@ -351,15 +347,25 @@ def evaluate(agent, game, num_games):
     unstick crutch. The score itself stays honest (no unstick during eval)."""
     scores = []
     stuck = 0
-    for _ in range(num_games):
-        game.reset()
-        scores.append(play_game(agent, game))
-        if game_outcome(game) == 'stuck':
-            stuck += 1
+    # Reseed per game for a paired, repeatable eval set (food placement is random.*-driven),
+    # but save/restore the global RNG so training's own stochasticity is left untouched.
+    rng_state = random.getstate()
+    try:
+        for i in range(num_games):
+            random.seed(EVAL_SEED + i)
+            game.reset()
+            scores.append(play_game(agent, game))
+            if game_outcome(game) == 'stuck':
+                stuck += 1
+    finally:
+        random.setstate(rng_state)
     return sum(scores) / len(scores), max(scores), stuck
 
 
 def train(headless=True, load_checkpoint='checkpoint_last.pth'):
+    # Headless training has no Pygame window to keep responsive, so let torch use more cores.
+    if headless:
+        torch.set_num_threads(TORCH_THREADS_HEADLESS)
     agent = Agent()
     game = SnakeGameAI(w=640, h=640, num_apples=NUM_APPLES, headless=headless)
     game.speed = 0  # Uncapped FPS — rendering is throttled in snake_game.py
@@ -375,7 +381,7 @@ def train(headless=True, load_checkpoint='checkpoint_last.pth'):
     # Sweep traceability: captured after CLI overrides have been applied to the module
     # globals (in __main__, before train() is called). Round-trips through checkpoint
     # dicts for benchmark.py to display — not a persistent Agent attribute.
-    run_config = {'lr': LR, 'dagger_prob_max': DAGGER_PROB_MAX, 'curriculum_prob': CURRICULUM_PROB}
+    run_config = {'algo': 'bc', 'lr': LR, 'dagger_prob_max': DAGGER_PROB_MAX, 'curriculum_prob': CURRICULUM_PROB}
     print(f"Config: LR={LR}, DAGGER_PROB_MAX={DAGGER_PROB_MAX}, "
           f"CURRICULUM_PROB={CURRICULUM_PROB}, MODEL_FOLDER={MODEL_FOLDER}", flush=True)
 
@@ -391,7 +397,8 @@ def train(headless=True, load_checkpoint='checkpoint_last.pth'):
     game_batches = 0
     episode_dagger = False
     current_is_curriculum = False
-    dagger_visited = set()  # (head Point, Direction) since last food — prevents buffer flooding on loops
+    dagger_visited = set()  # (head Point, Direction) since last food — used to detect loops
+    dagger_loop_steps = 0   # consecutive looping steps allowed before forcing the teacher (DAGGER_LOOP_BUDGET)
 
     if headless:
         print("Training started (headless mode — no game window).", flush=True)
@@ -406,9 +413,20 @@ def train(headless=True, load_checkpoint='checkpoint_last.pth'):
             episode_dagger = True
             dagger_key = (game.head, game.direction)
             if dagger_key in dagger_visited:
-                action = teacher_action  # loop detected — teacher breaks it, label unchanged
+                # Loop detected. Let the network keep digging for up to DAGGER_LOOP_BUDGET
+                # steps so the buffer collects deep-loop states (label stays the teacher's),
+                # then force the teacher to break out. Label is unchanged either way.
+                dagger_loop_steps += 1
+                if dagger_loop_steps <= DAGGER_LOOP_BUDGET:
+                    action = agent.get_network_action(state_old, game)
+                else:
+                    action = teacher_action
             else:
+                # New (head, direction) this interval = genuine progress, not a loop.
+                # Re-arm the dig budget so it fires afresh on the NEXT distinct loop —
+                # otherwise it's spent once per inter-apple interval and under-collects.
                 dagger_visited.add(dagger_key)
+                dagger_loop_steps = 0
                 action = agent.get_network_action(state_old, game)
         else:
             action = teacher_action
@@ -422,6 +440,7 @@ def train(headless=True, load_checkpoint='checkpoint_last.pth'):
         # frame_iteration resets to 0 inside play_step when food is eaten
         if game.frame_iteration == 0 and not done:
             dagger_visited.clear()
+            dagger_loop_steps = 0
 
         agent.total_steps += 1
         if agent.total_steps % TRAIN_EVERY_N_STEPS == 0 and len(agent.memory) >= BATCH_SIZE:
@@ -455,6 +474,7 @@ def train(headless=True, load_checkpoint='checkpoint_last.pth'):
                 agent.eval_games_history.append(agent.n_games)
                 agent.eval_avg_history.append(avg_eval)
                 agent.eval_max_history.append(max_eval)
+                agent.eval_stuck_history.append(stuck / EVAL_GAMES)
                 print(f'  >> Honest eval: avg={avg_eval:.1f}, max={max_eval}, '
                       f'stuck={stuck}/{EVAL_GAMES} ({EVAL_GAMES} games)', flush=True)
 
@@ -472,6 +492,7 @@ def train(headless=True, load_checkpoint='checkpoint_last.pth'):
                     eval_games_history=agent.eval_games_history,
                     eval_avg_history=agent.eval_avg_history,
                     eval_max_history=agent.eval_max_history,
+                    eval_stuck_history=agent.eval_stuck_history,
                     loss_history=agent.loss_history,
                     mean_loss_history=agent.mean_loss_history,
                     score_history=agent.score_history[-1000:], # keep only last 1000 to save space
@@ -480,10 +501,12 @@ def train(headless=True, load_checkpoint='checkpoint_last.pth'):
 
             if agent.n_games % PLOT_EVERY_N_GAMES == 0:
                 plot(agent.eval_games_history, agent.eval_avg_history, agent.eval_max_history,
-                     agent.loss_history, agent.mean_loss_history, output_path=learning_curve_path)
+                     agent.eval_stuck_history, agent.loss_history, agent.mean_loss_history,
+                     output_path=learning_curve_path)
 
             episode_dagger = False
             dagger_visited.clear()
+            dagger_loop_steps = 0
             current_is_curriculum = (
                 agent.n_games > CURRICULUM_START_GAMES and random.random() < CURRICULUM_PROB
             )
@@ -568,7 +591,7 @@ if __name__ == '__main__':
 
     if args.init_only:
         agent = Agent()
-        run_config = {'lr': LR, 'dagger_prob_max': DAGGER_PROB_MAX, 'curriculum_prob': CURRICULUM_PROB}
+        run_config = {'algo': 'bc', 'lr': LR, 'dagger_prob_max': DAGGER_PROB_MAX, 'curriculum_prob': CURRICULUM_PROB}
         agent.save_checkpoint('checkpoint_last.pth', run_config=run_config)
         agent.save_checkpoint('checkpoint_best.pth', eval_score=0.0, run_config=run_config)
         print(f"Initialized new model at {MODEL_FOLDER} with config: {run_config}", flush=True)

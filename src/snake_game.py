@@ -65,31 +65,38 @@ RENDER_EVERY_N_FRAMES = 1000
 
 
 # ──────────────────────────────────────────────────
-# Premium color palette
+# Neon palette (dark)
 # ──────────────────────────────────────────────────
-_BG_COLOR = (13, 15, 18)
-_GRID_LINE_COLOR = (28, 32, 38)
-_GRID_DOT_COLOR = (35, 40, 48)
+_BG_COLOR = (8, 10, 14)            # deep near-black backdrop
+_GRID_LINE_COLOR = (20, 26, 34)    # static dim grid lines
+_GRID_DOT_COLOR = (28, 38, 50)     # static dim intersection dots
+_GRID_GLOW_LINE = (0, 150, 130)    # "lit" grid lines (alpha-modulated each frame)
+_GRID_GLOW_DOT = (0, 220, 190)     # "lit" intersection dots
 
-# Snake gradient: bright green head → dark teal tail
-_SNAKE_HEAD_COLOR = (0, 230, 120)
-_SNAKE_HEAD_GLOW = (0, 255, 140)
-_SNAKE_BODY_START = (0, 200, 100)
-_SNAKE_BODY_END = (0, 80, 60)
-_SNAKE_EYE_WHITE = (240, 240, 240)
-_SNAKE_EYE_PUPIL = (20, 20, 20)
+# Snake gradient: bright neon green head → deep teal tail
+_SNAKE_HEAD_COLOR = (90, 255, 175)
+_SNAKE_BODY_START = (0, 235, 145)
+_SNAKE_BODY_END = (0, 95, 115)
+_SNAKE_EDGE_COLOR = (170, 255, 215)  # thin neon rim around the tube
+_SNAKE_EYE_WHITE = (245, 255, 250)
+_SNAKE_EYE_PUPIL = (8, 16, 14)
 
-# Food
-_FOOD_COLOR = (255, 60, 80)
-_FOOD_GLOW_COLOR = (255, 40, 60)
+# Food — neon red/pink
+_FOOD_COLOR = (255, 55, 90)
+_FOOD_CORE = (255, 140, 165)
+_FOOD_GLOW_COLOR = (255, 40, 80)
+_FOOD_SHINE = (255, 215, 225)
+
+# Particle burst colors (eat effect)
+_PARTICLE_COLORS = [
+    (255, 90, 120), (255, 165, 90), (120, 255, 195), (255, 235, 130),
+]
 
 # HUD
-_HUD_BG = (0, 0, 0, 140)
-_HUD_TEXT_COLOR = (220, 230, 220)
-_HUD_ACCENT = (0, 220, 110)
-
-# Score popup
-_SCORE_POPUP_COLOR = (0, 255, 140)
+_HUD_BG = (0, 0, 0, 150)
+_HUD_TEXT_COLOR = (160, 225, 215)
+_HUD_ACCENT = (60, 255, 185)
+_HUD_DIM = (90, 130, 130)
 
 
 def _lerp_color(c1, c2, t):
@@ -110,7 +117,10 @@ class SnakeGameAI:
         self.speed = 80 # Initial game speed
         self._render_counter = 0 # Frame counter for render throttling
         self.headless = headless
-        self._frame_tick = 0  # For animations (food pulse, etc.)
+        self._frame_tick = 0  # Game-step counter (bumped by play_step/play_manual)
+        self._anim_tick = 0   # Cosmetic counter — bumped once per rendered frame in _update_ui
+        self._particles = []  # Eat-burst particles (purely visual)
+        self._last_score = 0  # Tracks score across frames to detect "just ate" in _update_ui
 
         if not headless:
             _ensure_pygame()
@@ -121,12 +131,13 @@ class SnakeGameAI:
             self._font_large = pygame.font.SysFont('Helvetica Neue,Helvetica,Arial', 22, bold=True)
             self._font_small = pygame.font.SysFont('Helvetica Neue,Helvetica,Arial', 14)
 
-            # Pre-render the grid background (static — only done once)
-            self._grid_surface = self._build_grid_surface()
+            # Pre-render static layers (only built once)
+            self._grid_surface = self._build_grid_surface()          # dark base + dim grid
+            self._grid_glow_surface = self._build_grid_glow_surface() # "lit" grid, alpha-pulsed
+            self._vignette_surface = self._build_vignette_surface()   # edge darkening for depth
 
-            # Glow surface for food (pre-computed for performance)
-            self._food_glow_surface = self._build_glow_surface(BLOCK_SIZE // 2, _FOOD_GLOW_COLOR, alpha=40)
-            self._head_glow_surface = self._build_glow_surface(BLOCK_SIZE // 2, _SNAKE_HEAD_GLOW, alpha=30)
+            # Soft glow for food (pre-computed for performance; restrained alpha)
+            self._food_glow_surface = self._build_glow_surface(BLOCK_SIZE // 2, _FOOD_GLOW_COLOR, alpha=45)
         else:
             self.display = None
             self.clock = None
@@ -160,6 +171,37 @@ class SnakeGameAI:
             a = int(alpha * (r / radius) ** 2)
             a = max(0, min(255, a))
             pygame.draw.circle(surf, (*color, a), (center, center), r)
+        return surf
+
+    def _build_grid_glow_surface(self):
+        """Transparent overlay of the *lit* neon grid. Blitted each frame with a
+        breathing alpha so the board gently pulses (the 'animated background')."""
+        surf = pygame.Surface((self.w, self.h), pygame.SRCALPHA)
+        for x in range(0, self.w + 1, BLOCK_SIZE):
+            pygame.draw.line(surf, (*_GRID_GLOW_LINE, 255), (x, 0), (x, self.h))
+        for y in range(0, self.h + 1, BLOCK_SIZE):
+            pygame.draw.line(surf, (*_GRID_GLOW_LINE, 255), (0, y), (self.w, y))
+        for x in range(0, self.w + 1, BLOCK_SIZE):
+            for y in range(0, self.h + 1, BLOCK_SIZE):
+                pygame.draw.circle(surf, (*_GRID_GLOW_DOT, 255), (x, y), 2)
+        return surf
+
+    def _build_vignette_surface(self):
+        """Radial edge-darkening overlay (transparent center → dark corners) for depth."""
+        surf = pygame.Surface((self.w, self.h), pygame.SRCALPHA)
+        cx, cy = self.w / 2, self.h / 2
+        max_r = math.hypot(cx, cy)
+        # Compute the per-pixel alpha ramp directly (numpy) instead of stacking
+        # concentric pygame.draw.circle discs: draw blends alpha onto an SRCALPHA
+        # surface, so overlapping discs accumulate and over-darken the center. Here
+        # each pixel gets exactly one alpha = f(distance from center), RGB stays black.
+        # surfarray axes are [x][y], so xs is a column vector and ys a row vector.
+        xs = np.arange(self.w).reshape(-1, 1)
+        ys = np.arange(self.h).reshape(1, -1)
+        dist = np.hypot(xs - cx, ys - cy) / max_r
+        alpha = np.minimum(135 * np.power(dist, 2.2), 255).astype(np.uint8)
+        pygame.surfarray.pixels3d(surf)[:] = 0
+        pygame.surfarray.pixels_alpha(surf)[:] = alpha
         return surf
 
     @property
@@ -214,7 +256,7 @@ class SnakeGameAI:
         self.foods = []
         self._place_food(self.num_apples)
         self.frame_iteration = 0
-        self.visited_since_food = set()  # (gx, gy) grid coords of head positions since last food
+        self.visited_since_food = {}  # (gx, gy) grid coords -> visit count since last food
 
     def _place_food(self, count):
         # Collect all free cells (not occupied by snake or existing food),
@@ -254,7 +296,8 @@ class SnakeGameAI:
 
         # 2. Move
         self._move(action) # Updates self.head
-        self.visited_since_food.add((self.head.x // BLOCK_SIZE, self.head.y // BLOCK_SIZE))
+        _cell = (self.head.x // BLOCK_SIZE, self.head.y // BLOCK_SIZE)
+        self.visited_since_food[_cell] = self.visited_since_food.get(_cell, 0) + 1
 
         # If food is not eaten, the tail leaves its cell on THIS same step —
         # this is why safe_moves() considers moving into the current tail cell safe.
@@ -354,63 +397,130 @@ class SnakeGameAI:
         if self.headless:
             return
 
-        # Blit pre-rendered grid background
+        self._anim_tick += 1
+
+        # ── Detect "just ate" to fire a particle burst (no game-logic change) ──
+        # score is updated by play_step/play_manual BEFORE _update_ui is called.
+        if self.score > self._last_score:
+            self._spawn_eat_particles()
+            self._last_score = self.score
+        elif self.score < self._last_score:
+            # A reset() happened — resync silently and drop stale particles.
+            self._last_score = self.score
+            self._particles.clear()
+
+        # ── Animated background: static dark grid + breathing neon overlay ──
         self.display.blit(self._grid_surface, (0, 0))
+        breath = math.sin(self._anim_tick * 0.035) * 0.5 + 0.5  # 0..1
+        self._grid_glow_surface.set_alpha(int(14 + 26 * breath))
+        self.display.blit(self._grid_glow_surface, (0, 0))
 
-        # ── Render snake ──
-        snake_len = len(self.snake)
-        for i, pt in enumerate(self.snake):
-            t = i / max(1, snake_len - 1)  # 0 = head, 1 = tail
+        # ── Snake, food, particles ──
+        self._draw_snake()
+        self._draw_food()
+        self._draw_particles()
 
-            # Gradient color from head to tail
-            color = _lerp_color(_SNAKE_BODY_START, _SNAKE_BODY_END, t)
-
-            # Segment size shrinks slightly toward tail for a tapered look
-            shrink = int(t * 4)
-            rect = pygame.Rect(pt.x + shrink, pt.y + shrink,
-                               BLOCK_SIZE - shrink * 2, BLOCK_SIZE - shrink * 2)
-
-            # Rounded rectangle for body segments
-            border_radius = max(4, BLOCK_SIZE // 4 - int(t * 4))
-
-            if i == 0:
-                # HEAD — brighter, with subtle glow
-                head_rect = pygame.Rect(pt.x + 1, pt.y + 1, BLOCK_SIZE - 2, BLOCK_SIZE - 2)
-
-                pygame.draw.rect(self.display, _SNAKE_HEAD_COLOR, head_rect,
-                                 border_radius=BLOCK_SIZE // 3)
-
-                # Eyes
-                self._draw_eyes(pt)
-            else:
-                pygame.draw.rect(self.display, color, rect, border_radius=border_radius)
-
-                # Subtle inner highlight for depth
-                inner_rect = pygame.Rect(rect.x + 2, rect.y + 2,
-                                         rect.width - 4, rect.height - 4)
-                highlight = _lerp_color(color, (255, 255, 255), 0.08)
-                pygame.draw.rect(self.display, highlight, inner_rect,
-                                 border_radius=max(2, border_radius - 2))
-
-        # ── Render food ──
-        pulse = math.sin(self._frame_tick * 0.08) * 0.06 + 0.94  # subtle 0.88-1.0
-        for food in self.foods:
-            # Small food rectangle with rounded corners
-            margin = int(BLOCK_SIZE * 0.2)
-            food_size = BLOCK_SIZE - margin * 2
-            food_rect = pygame.Rect(food.x + margin, food.y + margin,
-                                     food_size, food_size)
-            pygame.draw.rect(self.display, _FOOD_COLOR, food_rect, border_radius=6)
-
-            # Small shine highlight
-            shine_rect = pygame.Rect(food.x + margin + 3, food.y + margin + 3,
-                                      food_size // 3, food_size // 3)
-            pygame.draw.rect(self.display, (255, 130, 150), shine_rect, border_radius=3)
-
-        # ── HUD overlay ──
+        # ── Edge vignette for depth, then HUD on top ──
+        self.display.blit(self._vignette_surface, (0, 0))
         self._draw_hud()
 
         pygame.display.flip()
+
+    def _draw_snake(self):
+        """Draw the snake as a continuous neon tube with smooth rounded turns and a
+        head→tail gradient. Consecutive cells are always grid-adjacent, so connecting
+        thick capsules between cell centers yields a single connected body."""
+        snake = self.snake
+        n = len(snake)
+        H = BLOCK_SIZE // 2
+        centers = [(pt.x + H, pt.y + H) for pt in snake]
+
+        def radius(i):
+            t = i / max(1, n - 1)          # 0 = head, 1 = tail
+            return BLOCK_SIZE * 0.40 * (1.0 - 0.32 * t)
+
+        def body_color(i):
+            t = i / max(1, n - 1)
+            return _lerp_color(_SNAKE_BODY_START, _SNAKE_BODY_END, t)
+
+        # Pass 1: bright neon rim (slightly oversized). Pass 2: gradient fill on top,
+        # leaving only a thin lit edge — the restrained neon look (no heavy bloom).
+        for rim in (True, False):
+            for i in range(n - 1):
+                r = radius(i)
+                if rim:
+                    pygame.draw.line(self.display, _SNAKE_EDGE_COLOR,
+                                     centers[i], centers[i + 1], int(2 * r) + 4)
+                else:
+                    pygame.draw.line(self.display, body_color(i),
+                                     centers[i], centers[i + 1], max(2, int(2 * r)))
+            for i in range(n):
+                r = radius(i) + (2 if rim else 0)
+                col = _SNAKE_EDGE_COLOR if rim else body_color(i)
+                pygame.draw.circle(self.display, col, centers[i], int(r))
+
+        # Head — brighter cap (keeps its rim from pass 1) + direction-aware eyes.
+        pygame.draw.circle(self.display, _SNAKE_HEAD_COLOR, centers[0], int(radius(0)))
+        self._draw_eyes(snake[0])
+
+    def _draw_food(self):
+        """Neon gem food: soft glow halo + pulsing core + shine highlight."""
+        pulse = math.sin(self._anim_tick * 0.09) * 0.12 + 0.88  # 0.76..1.0
+        H = BLOCK_SIZE // 2
+        glow = self._food_glow_surface
+        gw, gh = glow.get_width(), glow.get_height()
+        for food in self.foods:
+            cx, cy = food.x + H, food.y + H
+            r = max(3, int(BLOCK_SIZE * 0.30 * pulse))
+            self.display.blit(glow, (cx - gw // 2, cy - gh // 2))
+            pygame.draw.circle(self.display, _FOOD_COLOR, (cx, cy), r)
+            pygame.draw.circle(self.display, _FOOD_CORE, (cx, cy), max(1, r - 5))
+            pygame.draw.circle(self.display, _FOOD_SHINE,
+                               (cx - r // 3, cy - r // 3), max(2, r // 4))
+
+    def _spawn_eat_particles(self):
+        """Spawn a short burst of sparks + an expanding ring at the head (eye candy)."""
+        H = BLOCK_SIZE // 2
+        cx, cy = self.head.x + H, self.head.y + H
+        for _ in range(14):
+            ang = random.uniform(0, 2 * math.pi)
+            spd = random.uniform(1.5, 4.5)
+            self._particles.append({
+                'x': float(cx), 'y': float(cy),
+                'vx': math.cos(ang) * spd, 'vy': math.sin(ang) * spd,
+                'life': 1.0, 'r': random.uniform(2, 4),
+                'color': random.choice(_PARTICLE_COLORS),
+            })
+        self._particles.append({'ring': True, 'x': cx, 'y': cy, 'life': 1.0})
+        if len(self._particles) > 200:
+            self._particles = self._particles[-200:]
+
+    def _draw_particles(self):
+        """Advance and draw the eat-burst particles; cull dead ones."""
+        alive = []
+        for p in self._particles:
+            p['life'] -= 0.045
+            if p['life'] <= 0:
+                continue
+            if p.get('ring'):
+                rr = int(BLOCK_SIZE * 0.25 + (1.0 - p['life']) * BLOCK_SIZE * 1.1)
+                a = int(170 * p['life'])
+                surf = pygame.Surface((rr * 2 + 6, rr * 2 + 6), pygame.SRCALPHA)
+                pygame.draw.circle(surf, (*_HUD_ACCENT, a), (rr + 3, rr + 3), rr, 3)
+                self.display.blit(surf, (p['x'] - rr - 3, p['y'] - rr - 3))
+            else:
+                p['x'] += p['vx']
+                p['y'] += p['vy']
+                p['vy'] += 0.12               # slight gravity
+                p['vx'] *= 0.95
+                p['vy'] *= 0.95
+                rr = max(1, int(p['r']))
+                a = int(255 * p['life'])
+                surf = pygame.Surface((rr * 2, rr * 2), pygame.SRCALPHA)
+                pygame.draw.circle(surf, (*p['color'], a), (rr, rr), rr)
+                self.display.blit(surf, (int(p['x']) - rr, int(p['y']) - rr))
+            alive.append(p)
+        self._particles = alive
 
     def _draw_eyes(self, head_pt):
         """Draw two eyes on the head, oriented by direction."""
@@ -443,24 +553,26 @@ class SnakeGameAI:
                                (ex + p_off[0], ey + p_off[1]), pupil_r)
 
     def _draw_hud(self):
-        """Draw a semi-transparent HUD bar at the top."""
-        hud_height = 36
+        """Draw a semi-transparent neon HUD bar at the top."""
+        hud_height = 38
         hud_surf = pygame.Surface((self.w, hud_height), pygame.SRCALPHA)
         hud_surf.fill(_HUD_BG)
         self.display.blit(hud_surf, (0, 0))
+        # Thin neon underline separating the HUD from the board.
+        pygame.draw.line(self.display, _HUD_ACCENT, (0, hud_height), (self.w, hud_height), 1)
 
         # Score
         score_text = self._font_large.render(f"SCORE  {self.score}", True, _HUD_ACCENT)
-        self.display.blit(score_text, (12, 7))
+        self.display.blit(score_text, (12, 8))
 
         # Speed
         speed_str = 'MAX' if self.speed == 0 else str(self.speed)
-        speed_text = self._font_small.render(f"SPEED: {speed_str}", True, _HUD_TEXT_COLOR)
-        self.display.blit(speed_text, (self.w - speed_text.get_width() - 12, 11))
+        speed_text = self._font_small.render(f"SPEED {speed_str}", True, _HUD_TEXT_COLOR)
+        self.display.blit(speed_text, (self.w - speed_text.get_width() - 12, 12))
 
         # Snake length
-        len_text = self._font_small.render(f"LEN: {len(self.snake)}", True, _HUD_TEXT_COLOR)
-        self.display.blit(len_text, (self.w - speed_text.get_width() - len_text.get_width() - 30, 11))
+        len_text = self._font_small.render(f"LEN {len(self.snake)}", True, _HUD_DIM)
+        self.display.blit(len_text, (self.w - speed_text.get_width() - len_text.get_width() - 28, 12))
 
     def _move(self, action):
         # [straight, turn right, turn left]

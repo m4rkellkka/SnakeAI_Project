@@ -1,24 +1,61 @@
 import { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { ToastProvider, useToast } from "./components/Toast";
+import { usePersistedState } from "./hooks/usePersistedState";
+import StatusBar from "./components/StatusBar";
 import TrainPanel from "./panels/TrainPanel";
 import WatchPanel from "./panels/WatchPanel";
 import BenchmarkPanel from "./panels/BenchmarkPanel";
 import ModelsPanel from "./panels/ModelsPanel";
 import SetupPanel from "./panels/SetupPanel";
+import SettingsPanel from "./panels/SettingsPanel";
 import "./App.css";
 
-const NAV = [
-  { id: "train",     label: "Train",     icon: "⚡" },
-  { id: "watch",     label: "Watch AI",  icon: "👁" },
-  { id: "benchmark", label: "Benchmark", icon: "📊" },
-  { id: "models",    label: "Models",    icon: "📁" },
+const NAV_SECTIONS = [
+  {
+    label: "Training",
+    items: [
+      { id: "train", label: "Train", icon: "⚡" },
+      { id: "watch", label: "Watch AI", icon: "👁" },
+    ],
+  },
+  {
+    label: "Analytics",
+    items: [
+      { id: "benchmark", label: "Benchmark", icon: "📊" },
+      { id: "models", label: "Models", icon: "📁" },
+    ],
+  },
+  {
+    label: "System",
+    items: [
+      { id: "settings", label: "Settings", icon: "⚙" },
+    ],
+  },
 ];
 
+// Shows a one-time toast after an (external) full-page reload so the user knows
+// their state was restored rather than silently swapped. Lives inside
+// ToastProvider so it can use the toast context.
+function ReloadNotice() {
+  const toast = useToast();
+  useEffect(() => {
+    // sessionStorage survives a page reload but not an app relaunch — exactly
+    // how we tell "the WebView reloaded under us" apart from a fresh launch.
+    if (sessionStorage.getItem("snakeai:mounted")) {
+      toast("↻ Интерфейс перезагружен — состояние восстановлено", "info");
+    }
+    sessionStorage.setItem("snakeai:mounted", "1");
+  }, [toast]);
+  return null;
+}
+
 export default function App() {
-  const [panel, setPanel] = useState("train");
+  const [panel, setPanel] = usePersistedState("panel", "train");
   const [projectRoot, setProjectRoot] = useState("");
   const [running, setRunning] = useState([]);
   const [envStatus, setEnvStatus] = useState(null);
+  const [collapsed, setCollapsed] = useState(false);
 
   const checkEnv = useCallback(async () => {
     try {
@@ -45,6 +82,18 @@ export default function App() {
     return () => clearInterval(interval);
   }, [checkEnv]);
 
+  // Diagnostic: in dev, log when (and ideally why) Vite forces a full reload,
+  // so we can confirm the trigger from the console and tighten watch.ignored.
+  useEffect(() => {
+    const hot = import.meta.hot;
+    if (!hot) return;
+    const onReload = (payload) => {
+      console.warn("[SnakeAI] Vite triggered a full page reload", payload);
+    };
+    hot.on("vite:beforeFullReload", onReload);
+    return () => hot.off?.("vite:beforeFullReload", onReload);
+  }, []);
+
   const isPanelRunning = (panelId) => {
     if (panelId === "train" || panelId === "benchmark") {
       return running.includes(panelId);
@@ -54,6 +103,10 @@ export default function App() {
     }
     return false;
   };
+
+  // Build a running map for the status bar
+  const runningMap = {};
+  running.forEach(p => { runningMap[p] = true; });
 
   const [projectRootInput, setProjectRootInput] = useState("");
   const [projectRootError, setProjectRootError] = useState("");
@@ -69,6 +122,7 @@ export default function App() {
     }
   };
 
+  /* ── Loading screen ── */
   if (envStatus === null || (projectRoot === "" && envStatus === null)) {
     return (
       <div className="setup-screen">
@@ -80,6 +134,7 @@ export default function App() {
     );
   }
 
+  /* ── No project root ── */
   if (projectRoot === "") {
     return (
       <div className="setup-screen">
@@ -106,7 +161,7 @@ export default function App() {
               onKeyDown={e => e.key === "Enter" && handleSetProjectRoot()}
             />
             {projectRootError && (
-              <p style={{ color: "#ef4444", fontSize: "13px", marginTop: "8px" }}>{projectRootError}</p>
+              <p style={{ color: "var(--red)", fontSize: "13px", marginTop: "8px" }}>{projectRootError}</p>
             )}
           </div>
           <div className="setup-actions">
@@ -119,6 +174,7 @@ export default function App() {
     );
   }
 
+  /* ── Setup screen ── */
   if (!envStatus.python_ok || !envStatus.deps_ok) {
     return (
       <SetupPanel
@@ -132,72 +188,104 @@ export default function App() {
     );
   }
 
+  /* ── Main app ── */
   return (
-    <div className="app">
-      <aside className="sidebar">
-        <div className="sidebar-logo">
-          <span className="sidebar-logo-icon">🐍</span>
-          <span className="sidebar-logo-text">Snake AI</span>
-        </div>
-        <nav className="sidebar-nav">
-          {NAV.map((item) => (
+    <ToastProvider>
+      <ReloadNotice />
+      <div className="app">
+        <aside className={`sidebar${collapsed ? ' sidebar--collapsed' : ''}`}>
+          <div className="sidebar-logo">
+            <span className="sidebar-logo-icon">🐍</span>
+            <span className="sidebar-logo-text">Snake AI</span>
             <button
-              key={item.id}
-              className={`nav-item ${panel === item.id ? "nav-item--active" : ""}`}
-              onClick={() => setPanel(item.id)}
+              className="sidebar-toggle"
+              onClick={() => setCollapsed(!collapsed)}
+              title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
             >
-              <span className="nav-icon">{item.icon}</span>
-              <span>{item.label}</span>
-              {isPanelRunning(item.id) && <span className="nav-dot" />}
+              {collapsed ? '›' : '‹'}
             </button>
-          ))}
-        </nav>
-        <div className="sidebar-footer">
-          <span className="version-tag">v1.0</span>
-          <button
-            className="btn-quit"
-            onClick={async () => {
-              if (running.length > 0 && !window.confirm("Processes are still running. Quit anyway?")) return;
-              await invoke("quit_app");
-            }}
-          >
-            ⏻ Quit
-          </button>
-        </div>
-      </aside>
+          </div>
 
-      <main className="main">
-        <div style={{ display: panel === "train" ? "block" : "none", height: "100%" }}>
-          <TrainPanel
-            projectRoot={projectRoot}
-            isRunning={running.includes("train")}
-            isActive={panel === "train"}
-          />
-        </div>
-        
-        <div style={{ display: panel === "watch" ? "block" : "none", height: "100%" }}>
-          <WatchPanel
-            projectRoot={projectRoot}
+          <nav className="sidebar-nav">
+            {NAV_SECTIONS.map((section, si) => (
+              <div key={section.label}>
+                <div className="nav-section-label">{section.label}</div>
+                {section.items.map((item) => (
+                  <button
+                    key={item.id}
+                    className={`nav-item${panel === item.id ? ' nav-item--active' : ''}`}
+                    onClick={() => setPanel(item.id)}
+                    title={collapsed ? item.label : undefined}
+                  >
+                    <span className="nav-icon">{item.icon}</span>
+                    <span className="nav-item-label">{item.label}</span>
+                    {isPanelRunning(item.id) && <span className="nav-dot" />}
+                  </button>
+                ))}
+                {si < NAV_SECTIONS.length - 1 && <div className="sidebar-divider" />}
+              </div>
+            ))}
+          </nav>
+
+          <div className="sidebar-footer">
+            <span className="version-tag">v1.0.0</span>
+            <button
+              className="btn-quit"
+              onClick={async () => {
+                if (running.length > 0 && !window.confirm("Processes are still running. Quit anyway?")) return;
+                await invoke("quit_app");
+              }}
+            >
+              <span className="btn-quit-icon">⏻</span> <span className="btn-quit-text">Quit</span>
+            </button>
+          </div>
+        </aside>
+
+        <main className="main">
+          <StatusBar
+            activePanel={panel}
+            running={runningMap}
             runningList={running}
-            isActive={panel === "watch"}
-          />
-        </div>
-        
-        <div style={{ display: panel === "benchmark" ? "block" : "none", height: "100%" }}>
-          <BenchmarkPanel
             projectRoot={projectRoot}
-            isRunning={running.includes("benchmark")}
-            isActive={panel === "benchmark"}
+            onNavigate={setPanel}
           />
-        </div>
-        
-        <div style={{ display: panel === "models" ? "block" : "none", height: "100%" }}>
-          <ModelsPanel
-            projectRoot={projectRoot}
-            isActive={panel === "models"}
-          />
-        </div>
-      </main>
-    </div>
+
+          <div className="main-content">
+            <div style={{ display: panel === "train" ? "block" : "none" }}>
+              <TrainPanel
+                projectRoot={projectRoot}
+                isRunning={running.includes("train")}
+                isActive={panel === "train"}
+              />
+            </div>
+
+            <div style={{ display: panel === "watch" ? "block" : "none" }}>
+              <WatchPanel
+                projectRoot={projectRoot}
+                runningList={running}
+                isActive={panel === "watch"}
+              />
+            </div>
+
+            <div style={{ display: panel === "benchmark" ? "block" : "none" }}>
+              <BenchmarkPanel
+                projectRoot={projectRoot}
+                isRunning={running.includes("benchmark")}
+                isActive={panel === "benchmark"}
+              />
+            </div>
+
+            <div style={{ display: panel === "models" ? "block" : "none" }}>
+              <ModelsPanel
+                projectRoot={projectRoot}
+                isActive={panel === "models"}
+              />
+            </div>
+
+            {panel === "settings" && <SettingsPanel />}
+          </div>
+        </main>
+      </div>
+    </ToastProvider>
   );
 }

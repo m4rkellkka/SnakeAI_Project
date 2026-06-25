@@ -10,6 +10,8 @@ struct ProcessRegistry(Arc<Mutex<HashMap<String, u32>>>);
 struct EnvCheck {
     python_ok: bool,
     python_version: String,
+    python_path: String,
+    project_root: String,
     deps_ok: bool,
     missing_packages: Vec<String>,
 }
@@ -37,6 +39,8 @@ fn check_environment() -> EnvCheck {
         return EnvCheck {
             python_ok: false,
             python_version: String::new(),
+            python_path: python.clone(),
+            project_root: base.clone(),
             deps_ok: false,
             missing_packages: vec!["torch".into(), "pygame".into(), "numpy".into(), "matplotlib".into()],
         };
@@ -70,6 +74,8 @@ fn check_environment() -> EnvCheck {
     EnvCheck {
         python_ok: true,
         python_version,
+        python_path: python.clone(),
+        project_root: base.clone(),
         deps_ok: missing.is_empty(),
         missing_packages: missing,
     }

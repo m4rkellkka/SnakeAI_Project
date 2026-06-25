@@ -1,19 +1,20 @@
 import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
+import EmptyState from "../components/EmptyState";
 import { formatCheckpoint, formatNumber, formatInteger } from "../utils";
 
 const CHART_STYLE = {
-  contentStyle: { background: "rgba(17,17,24,0.9)", border: "1px solid rgba(30,30,46,0.8)", borderRadius: 12, fontSize: 12, backdropFilter: "blur(10px)" },
-  labelStyle: { color: "#8b8b9a" },
+  contentStyle: { background: "rgba(12,12,18,0.95)", border: "1px solid rgba(63,63,70,0.4)", borderRadius: 10, fontSize: 12, backdropFilter: "blur(12px)" },
+  labelStyle: { color: "#94a3b8" },
 };
 
 const MODES = [
   {
     id: "watch-pretrained",
     title: "Watch Pretrained",
-    desc: "Load pretrained.pth and watch the best model play.",
+    desc: "Load the best pretrained model and watch it play Snake at near-perfect level.",
     args: ["-u", "src/train_ai.py", "--watch", "--pretrained"],
     icon: "🏆",
     color: "green",
@@ -21,8 +22,8 @@ const MODES = [
   {
     id: "watch-checkpoint",
     title: "Watch Checkpoint",
-    desc: "Load a specific checkpoint from your training run.",
-    args: ["-u", "src/train_ai.py", "--watch"], // We'll append --checkpoint later
+    desc: "Load a specific checkpoint from your training run to evaluate progress.",
+    args: ["-u", "src/train_ai.py", "--watch"],
     icon: "💾",
     color: "blue",
     needsCheckpoint: true,
@@ -30,7 +31,7 @@ const MODES = [
   {
     id: "watch-teacher",
     title: "Watch Teacher",
-    desc: "Watch the perfect Hamiltonian-cycle teacher.",
+    desc: "Watch the perfect Hamiltonian-cycle teacher achieve 100% score every time.",
     args: ["-u", "src/teacher.py"],
     icon: "📐",
     color: "orange",
@@ -38,7 +39,7 @@ const MODES = [
   {
     id: "play-manual",
     title: "Play Manually",
-    desc: "Control the snake yourself with arrow keys.",
+    desc: "Take control of the snake yourself using arrow keys in a Pygame window.",
     args: ["-u", "src/play_manual.py"],
     icon: "🎮",
     color: "purple",
@@ -51,9 +52,12 @@ export default function WatchPanel({ projectRoot, runningList, isActive }) {
   const [log, setLog]         = useState([]);
   const [liveData, setLiveData] = useState([]);
   const [history, setHistory] = useState(null);
+  const [logCollapsed, setLogCollapsed] = useState(false);
   
   const logBodyRef = useRef(null);
   const isUserScrolling = useRef(false);
+  const liveMeanRef = useRef({ sum: 0, count: 0 });
+  const [liveMean, setLiveMean] = useState(null);
 
   useEffect(() => {
     if (projectRoot && isActive) {
@@ -107,7 +111,11 @@ export default function WatchPanel({ projectRoot, runningList, isActive }) {
         
         const match = /Game (\d+)\/\d+ \| Score: (\d+)/.exec(line);
         if (match) {
-          setLiveData((p) => [...p, { game: +match[1], score: +match[2] }]);
+          const score = +match[2];
+          liveMeanRef.current.sum += score;
+          liveMeanRef.current.count += 1;
+          setLiveMean(liveMeanRef.current.sum / liveMeanRef.current.count);
+          setLiveData((p) => [...p, { game: +match[1], score }].slice(-600));
         }
       }),
       listen(`proc-done:${m.id}`, () => {}),
@@ -136,6 +144,8 @@ export default function WatchPanel({ projectRoot, runningList, isActive }) {
     }
     setLog([]);
     setLiveData([]);
+    setLiveMean(null);
+    liveMeanRef.current = { sum: 0, count: 0 };
     await invoke("start_process", { id: mode.id, args, cwd: projectRoot });
     isUserScrolling.current = false;
   };
@@ -156,11 +166,15 @@ export default function WatchPanel({ projectRoot, runningList, isActive }) {
     <div className="panel">
       <div className="panel-header">
         <h2>Watch AI</h2>
+        {isAnyRunning && (
+          <span className="badge badge--running">● Running</span>
+        )}
       </div>
       <p className="panel-desc">
-        Each button opens a separate Pygame window. The Tauri dashboard stays open.
+        Launch a Pygame window to watch models play, or play manually yourself. Each mode opens a separate window.
       </p>
 
+      {/* ── Mode Cards ── */}
       <div className="watch-grid">
         {MODES.map((m) => (
           <div key={m.id} className={`watch-card watch-card--${m.color}`}>
@@ -168,8 +182,14 @@ export default function WatchPanel({ projectRoot, runningList, isActive }) {
             <h3>{m.title}</h3>
             <p>{m.desc}</p>
             {m.needsCheckpoint && (
-              <div className="form-group" style={{ marginTop: 'auto', marginBottom: '8px' }}>
-                <select className="input select" value={checkpoint} onChange={(e) => setCheckpoint(e.target.value)} disabled={isAnyRunning} style={{ fontSize: 12, padding: "6px 8px" }}>
+              <div className="form-group" style={{ marginTop: 'auto', marginBottom: '4px' }}>
+                <select
+                  className="input"
+                  value={checkpoint}
+                  onChange={(e) => setCheckpoint(e.target.value)}
+                  disabled={isAnyRunning}
+                  style={{ fontSize: 12, padding: "6px 10px" }}
+                >
                   {checkpointList.map(cp => <option key={cp} value={cp}>{formatCheckpoint(cp)}</option>)}
                 </select>
               </div>
@@ -188,53 +208,73 @@ export default function WatchPanel({ projectRoot, runningList, isActive }) {
         ))}
       </div>
 
-      <div style={{ display: "flex", gap: "20px", marginTop: "20px" }}>
-        <div className="card" style={{ flex: 2 }}>
-          <div className="card-title" style={{ marginBottom: "16px" }}>LIVE SCORE PER GAME</div>
-          <ResponsiveContainer width="100%" height={200}>
-            <LineChart data={liveData} margin={{ top: 10, right: 20, left: -20, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="rgba(30,30,46,0.6)" />
-              <XAxis dataKey="game" stroke="#8b8b9a" tick={{ fontSize: 10 }} />
-              <YAxis stroke="#8b8b9a" tick={{ fontSize: 10 }} domain={[0, 253]} />
-              <Tooltip {...CHART_STYLE} />
-              <Line type="monotone" dataKey="score" stroke="#10b981" strokeWidth={2} dot={true} name="Score" />
-            </LineChart>
-          </ResponsiveContainer>
-        </div>
-        
-        <div style={{ flex: 1, display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px" }}>
-          <div className="card" style={{ display: "flex", flexDirection: "column", justifyContent: "center", alignItems: "center" }}>
-            <div style={{ fontSize: "11px", color: "#8b8b9a", textTransform: "uppercase", letterSpacing: "1px", marginBottom: "8px" }}>Games Trained</div>
-            <div style={{ fontSize: "28px", fontWeight: "700", color: "#e4e4e7" }}>{history ? formatInteger(history.n_games) : "--"}</div>
+      {/* ── Stats + Chart area (only when we have data) ── */}
+      {(liveData.length > 0 || history) && (
+        <div className="watch-bottom-layout">
+          <div className="watch-chart-section card">
+            <div className="card-title">📈 Live Score Per Game</div>
+            {liveData.length > 0 ? (
+              <ResponsiveContainer width="100%" height={200}>
+                <LineChart data={liveData} margin={{ top: 10, right: 20, left: -20, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(63,63,70,0.3)" />
+                  <XAxis dataKey="game" stroke="#64748b" tick={{ fontSize: 11 }} />
+                  <YAxis stroke="#64748b" tick={{ fontSize: 11 }} domain={[0, 253]} />
+                  <Tooltip {...CHART_STYLE} />
+                  <Line type="monotone" dataKey="score" stroke="#10b981" strokeWidth={2} dot={true} name="Score" />
+                </LineChart>
+              </ResponsiveContainer>
+            ) : (
+              <EmptyState icon="📊" title="No live data" desc="Launch a mode to see live scores." />
+            )}
           </div>
-          <div className="card" style={{ display: "flex", flexDirection: "column", justifyContent: "center", alignItems: "center" }}>
-            <div style={{ fontSize: "11px", color: "#8b8b9a", textTransform: "uppercase", letterSpacing: "1px", marginBottom: "8px" }}>Total Steps</div>
-            <div style={{ fontSize: "28px", fontWeight: "700", color: "#f59e0b" }}>{history ? formatInteger(history.total_steps) : "--"}</div>
-          </div>
-          <div className="card" style={{ display: "flex", flexDirection: "column", justifyContent: "center", alignItems: "center" }}>
-            <div style={{ fontSize: "11px", color: "#8b8b9a", textTransform: "uppercase", letterSpacing: "1px", marginBottom: "8px" }}>Created At</div>
-            <div style={{ fontSize: "20px", fontWeight: "700", color: "#3b82f6", textAlign: "center" }}>
-              {history && history.creation_date ? new Date(history.creation_date * 1000).toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit", year: "numeric" }) : "--"}
+          
+          <div className="watch-stats-grid">
+            <div className="watch-stat-card">
+              <div className="watch-stat-label">Games Trained</div>
+              <div className="watch-stat-value watch-stat-value--white">
+                {history ? formatInteger(history.n_games) : "--"}
+              </div>
+            </div>
+            <div className="watch-stat-card">
+              <div className="watch-stat-label">Total Steps</div>
+              <div className="watch-stat-value watch-stat-value--orange">
+                {history ? formatInteger(history.total_steps) : "--"}
+              </div>
+            </div>
+            <div className="watch-stat-card">
+              <div className="watch-stat-label">Created</div>
+              <div className="watch-stat-value watch-stat-value--blue" style={{ fontSize: "18px" }}>
+                {history && history.creation_date
+                  ? new Date(history.creation_date * 1000).toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit", year: "numeric" })
+                  : "--"}
+              </div>
+            </div>
+            <div className="watch-stat-card">
+              <div className="watch-stat-label">Live Mean</div>
+              <div className="watch-stat-value watch-stat-value--green">
+                {liveMean !== null ? formatNumber(liveMean, 1) : "--"}
+              </div>
             </div>
           </div>
-          <div className="card" style={{ display: "flex", flexDirection: "column", justifyContent: "center", alignItems: "center" }}>
-            <div style={{ fontSize: "11px", color: "#8b8b9a", textTransform: "uppercase", letterSpacing: "1px", marginBottom: "8px" }}>Live Mean Score</div>
-            <div style={{ fontSize: "28px", fontWeight: "700", color: "#10b981" }}>
-              {liveData.length > 0 ? formatNumber(liveData.reduce((s, d) => s + d.score, 0) / liveData.length, 1) : "--"}
-            </div>
-          </div>
         </div>
-      </div>
+      )}
 
+      {/* ── Log ── */}
       {log.length > 0 && (
-        <div className="log-card" style={{ marginTop: "20px" }}>
-          <div className="log-head">
-            <span className="log-head-title">Output</span>
-            <button className="btn-link" onClick={() => { setLog([]); setLiveData([]); isUserScrolling.current = false; }}>Clear</button>
+        <div className={`log-card${logCollapsed ? ' log-card--collapsed' : ''}`} style={{ marginTop: "20px", height: "240px" }}>
+          <div className="log-head" onClick={() => setLogCollapsed(!logCollapsed)}>
+            <div className="log-head-left">
+              <span className="log-head-toggle">▼</span>
+              <span className="log-head-title">Output</span>
+              <span className="log-head-count">{log.length} lines</span>
+            </div>
+            <button className="btn-link" onClick={(e) => { e.stopPropagation(); setLog([]); setLiveData([]); setLiveMean(null); liveMeanRef.current = { sum: 0, count: 0 }; isUserScrolling.current = false; }}>Clear</button>
           </div>
-          <div className="log-body" ref={logBodyRef} onScroll={handleScroll}>
-            {log.map((l, i) => <div key={i} className="log-line">{l}</div>)}
-          </div>
+          {!logCollapsed && (
+            <div className="log-body" ref={logBodyRef} onScroll={handleScroll}>
+              {log.map((l, i) => <div key={i} className="log-line"><span className="log-line-icon">›</span>{l}</div>)}
+            </div>
+          )}
         </div>
       )}
     </div>

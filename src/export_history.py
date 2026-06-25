@@ -15,15 +15,24 @@ def main():
 
     try:
         checkpoint = torch.load(path, weights_only=True, map_location='cpu')
+        run_config = checkpoint.get('run_config', {}) or {}
+        # 'algo' lives at the top level on RL checkpoints; BC stores it inside run_config
+        # (and older checkpoints have neither — default to 'bc').
+        algo = checkpoint.get('algo') or run_config.get('algo', 'bc')
         history = {
+            'algo': algo,
+            'model_arch': checkpoint.get('model_arch'),
+            'run_config': run_config,
             'n_games': checkpoint.get('n_games', 0),
             'total_steps': checkpoint.get('total_steps', 0),
             'eval_games_history': checkpoint.get('eval_games_history', []),
             'eval_avg_history': checkpoint.get('eval_avg_history', []),
             'eval_max_history': checkpoint.get('eval_max_history', []),
+            'eval_stuck_history': checkpoint.get('eval_stuck_history', []),
             'loss_history': checkpoint.get('loss_history', []),
             'mean_loss_history': checkpoint.get('mean_loss_history', []),
             'score_history': checkpoint.get('score_history', []),
+            'reward_history': checkpoint.get('reward_history', []),
             'creation_date': os.path.getmtime(path)
         }
         print(json.dumps(history))
