@@ -190,14 +190,18 @@ class SnakeGameAI:
         """Radial edge-darkening overlay (transparent center → dark corners) for depth."""
         surf = pygame.Surface((self.w, self.h), pygame.SRCALPHA)
         cx, cy = self.w / 2, self.h / 2
-        max_r = int(math.hypot(cx, cy))
-        # Draw filled discs from the outside in; on an SRCALPHA surface each draw
-        # replaces (not blends) pixel alpha, so a point ends up with the alpha of the
-        # smallest disc covering it — i.e. alpha grows with distance from center.
-        for r in range(max_r, 0, -2):
-            t = r / max_r
-            a = int(135 * (t ** 2.2))
-            pygame.draw.circle(surf, (0, 0, 0, a), (int(cx), int(cy)), r)
+        max_r = math.hypot(cx, cy)
+        # Compute the per-pixel alpha ramp directly (numpy) instead of stacking
+        # concentric pygame.draw.circle discs: draw blends alpha onto an SRCALPHA
+        # surface, so overlapping discs accumulate and over-darken the center. Here
+        # each pixel gets exactly one alpha = f(distance from center), RGB stays black.
+        # surfarray axes are [x][y], so xs is a column vector and ys a row vector.
+        xs = np.arange(self.w).reshape(-1, 1)
+        ys = np.arange(self.h).reshape(1, -1)
+        dist = np.hypot(xs - cx, ys - cy) / max_r
+        alpha = np.minimum(135 * np.power(dist, 2.2), 255).astype(np.uint8)
+        pygame.surfarray.pixels3d(surf)[:] = 0
+        pygame.surfarray.pixels_alpha(surf)[:] = alpha
         return surf
 
     @property
