@@ -3,7 +3,7 @@ import ProcessTray from "./ProcessTray";
 export default function StatusBar({ activePanel, running, runningList, projectRoot, onNavigate }) {
   const panelNames = {
     train: 'Training',
-    watch: 'Watch AI',
+    play: 'Play',
     benchmark: 'Benchmark',
     models: 'Models',
     settings: 'Settings',

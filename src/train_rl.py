@@ -20,6 +20,7 @@ import sys
 import argparse
 import random
 import numpy as np
+from collections import deque
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -63,9 +64,9 @@ TEACHER_EPS_DECAY_STEPS = 80_000
 
 # --- Reward shaping ---
 REWARD_FOOD = 10.0       # ate an apple (score increased)
-REWARD_DEATH = -10.0     # wall/self collision OR loop-timeout ('stuck') — looping is punished as hard as dying
+REWARD_DEATH = -50.0     # wall/self collision OR loop-timeout ('stuck') — looping is punished as hard as dying
 REWARD_WIN = 10.0        # filled the board
-STEP_PENALTY = -0.01     # small per-step cost — discourages endless circling
+STEP_PENALTY = -0.02     # small per-step cost — discourages endless circling
 # Potential-based shaping toward the nearest food (Ng et al. 1999): F = γ·Φ(s') − Φ(s)
 # with Φ(s) = -dist_to_food. Provably policy-invariant — it speeds learning without
 # creating new optimal policies, so it can't be "hacked" by oscillating toward/away.
@@ -136,32 +137,65 @@ class DuelingSnakeNet(nn.Module):
         return v + (a - a.mean(dim=1, keepdim=True))  # Q-values
 
 
-# --- Replay buffer (5-tuples) ---
+# --- Replay buffer (N-step returns) ---
 class RLReplayBuffer:
-    """Ring buffer of (state, action_idx, reward, next_state, done, next_safe) for
-    off-policy DQN. `next_safe` is the safe-move mask of next_state, stored so the
-    Double-DQN target can mask its action selection the same way the behavior policy does."""
+    """Ring buffer of (state, action_idx, reward, next_state, done, next_safe, gamma) for
+    off-policy DQN. Implements N-step returns internally to accelerate learning."""
 
-    def __init__(self, capacity):
+    def __init__(self, capacity, n_step=3, gamma=GAMMA):
         self.capacity = capacity
         self.buffer = []
         self.pos = 0
+        self.n_step = n_step
+        self.gamma = gamma
+        self.n_step_buffer = deque(maxlen=n_step)
 
     def __len__(self):
         return len(self.buffer)
 
+    def _get_n_step_info(self):
+        reward, next_state, done, next_safe = self.n_step_buffer[-1][2:]
+        effective_gamma = self.gamma
+        for transition in reversed(list(self.n_step_buffer)[:-1]):
+            r, _, d, _ = transition[2:]
+            reward = r + self.gamma * reward * (1 - d)
+            if d:
+                effective_gamma = 0.0
+                done = True
+                next_state = transition[3]
+                next_safe = transition[5]
+            else:
+                effective_gamma *= self.gamma
+        return reward, next_state, done, next_safe, effective_gamma
+
     def push(self, state, action_idx, reward, next_state, done, next_safe):
-        item = (state, action_idx, reward, next_state, done, next_safe)
-        if len(self.buffer) < self.capacity:
-            self.buffer.append(item)
-        else:
-            self.buffer[self.pos] = item
-        self.pos = (self.pos + 1) % self.capacity
+        self.n_step_buffer.append((state, action_idx, reward, next_state, done, next_safe))
+        if len(self.n_step_buffer) == self.n_step:
+            r, n_s, d, n_safe, eff_gamma = self._get_n_step_info()
+            s, a = self.n_step_buffer[0][:2]
+            item = (s, a, r, n_s, d, n_safe, eff_gamma)
+            if len(self.buffer) < self.capacity:
+                self.buffer.append(item)
+            else:
+                self.buffer[self.pos] = item
+            self.pos = (self.pos + 1) % self.capacity
+        if done: # Flush buffer
+            while len(self.n_step_buffer) > 0:
+                self.n_step_buffer.popleft()
+                if len(self.n_step_buffer) > 0:
+                    r, n_s, d, n_safe, eff_gamma = self._get_n_step_info()
+                    s, a = self.n_step_buffer[0][:2]
+                    item = (s, a, r, n_s, d, n_safe, eff_gamma)
+                    if len(self.buffer) < self.capacity:
+                        self.buffer.append(item)
+                    else:
+                        self.buffer[self.pos] = item
+                    self.pos = (self.pos + 1) % self.capacity
 
     def sample(self, batch_size):
         batch = random.sample(self.buffer, batch_size)
-        states, actions, rewards, next_states, dones, next_safes = zip(*batch)
-        return states, actions, rewards, next_states, dones, next_safes
+        states, actions, rewards, next_states, dones, next_safes, gammas = zip(*batch)
+        return states, actions, rewards, next_states, dones, next_safes, gammas
 
 
 # --- DQN agent ---
@@ -218,7 +252,7 @@ class DQNAgent:
     def train_step(self):
         if len(self.memory) < BATCH_SIZE:
             return None
-        states, actions, rewards, next_states, dones, next_safes = self.memory.sample(BATCH_SIZE)
+        states, actions, rewards, next_states, dones, next_safes, gammas = self.memory.sample(BATCH_SIZE)
 
         states = torch.tensor(np.array(states), dtype=torch.float)
         next_states = torch.tensor(np.array(next_states), dtype=torch.float)
@@ -226,6 +260,7 @@ class DQNAgent:
         rewards = torch.tensor(rewards, dtype=torch.float).unsqueeze(1)
         dones = torch.tensor(dones, dtype=torch.float).unsqueeze(1)
         next_safe = torch.tensor(np.array(next_safes), dtype=torch.bool)  # (B, 3)
+        gammas = torch.tensor(gammas, dtype=torch.float).unsqueeze(1)
 
         # Q(s,a) for the actions actually taken
         q = self.model(states).gather(1, actions)
@@ -242,7 +277,7 @@ class DQNAgent:
             next_q_online = next_q_online.masked_fill(~next_safe & has_safe, float('-inf'))
             next_actions = next_q_online.argmax(dim=1, keepdim=True)
             next_q = self.target(next_states).gather(1, next_actions)
-            target_q = rewards + GAMMA * next_q * (1.0 - dones)
+            target_q = rewards + gammas * next_q * (1.0 - dones)
 
         loss = F.smooth_l1_loss(q, target_q)  # Huber
 
@@ -358,9 +393,11 @@ def warmstart(agent, game, num_episodes):
             reward = compute_reward(ate, done, outcome, prev_dist, new_dist)
             if done:
                 next_state = np.zeros_like(state)
+                next_safe = (True, True, True)
             else:
                 next_state = agent.get_state(game)
-            agent.memory.push(state, action_idx, reward, next_state, float(done))
+                next_safe = tuple(game.safe_moves())
+            agent.memory.push(state, action_idx, reward, next_state, float(done), next_safe)
             pushed += 1
             state = next_state
             prev_dist = new_dist

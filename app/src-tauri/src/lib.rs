@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
+use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, State};
@@ -198,10 +199,27 @@ fn find_python(base: &str) -> String {
 }
 
 fn kill_pid(pid: u32) {
+    // Kill the whole process group so child processes (python, torch) die too.
+    Command::new("kill")
+        .args(["-TERM", &format!("-{}", pid)])
+        .output()
+        .ok();
     Command::new("kill")
         .args(["-TERM", &pid.to_string()])
         .output()
         .ok();
+    let pid_copy = pid;
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        Command::new("kill")
+            .args(["-KILL", &format!("-{}", pid_copy)])
+            .output()
+            .ok();
+        Command::new("kill")
+            .args(["-KILL", &pid_copy.to_string()])
+            .output()
+            .ok();
+    });
 }
 
 fn is_valid_project_root(path: &str) -> bool {
@@ -290,6 +308,7 @@ fn start_process(
         .current_dir(&cwd)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        .process_group(0)
         .spawn()
         .map_err(|e| format!("Failed to spawn python3: {}", e))?;
 
@@ -326,13 +345,16 @@ fn start_process(
 
     let app_wait = app.clone();
     let id_wait = id.clone();
+    let expected_pid = pid;
     std::thread::spawn(move || {
         let _ = child.wait();
         {
             let mut map = registry.lock().unwrap();
-            map.remove(&id_wait);
+            if map.get(&id_wait) == Some(&expected_pid) {
+                map.remove(&id_wait);
+            }
         }
-        let _ = app_wait.emit(&format!("proc-done:{}", id_wait), ());
+        let _ = app_wait.emit(&format!("proc-done:{}", id_wait), expected_pid);
     });
 
     Ok(())

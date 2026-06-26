@@ -4,7 +4,7 @@ import { ToastProvider, useToast } from "./components/Toast";
 import { usePersistedState } from "./hooks/usePersistedState";
 import StatusBar from "./components/StatusBar";
 import TrainPanel from "./panels/TrainPanel";
-import WatchPanel from "./panels/WatchPanel";
+import PlayPanel from "./panels/PlayPanel";
 import BenchmarkPanel from "./panels/BenchmarkPanel";
 import ModelsPanel from "./panels/ModelsPanel";
 import SetupPanel from "./panels/SetupPanel";
@@ -16,7 +16,7 @@ const NAV_SECTIONS = [
     label: "Training",
     items: [
       { id: "train", label: "Train", icon: "⚡" },
-      { id: "watch", label: "Watch AI", icon: "👁" },
+      { id: "play", label: "Play", icon: "🎮" },
     ],
   },
   {
@@ -56,6 +56,12 @@ export default function App() {
   const [running, setRunning] = useState([]);
   const [envStatus, setEnvStatus] = useState(null);
   const [collapsed, setCollapsed] = useState(false);
+
+  // The Watch AI tab was folded into Play — migrate a persisted "watch" selection
+  // so returning users don't land on a now-removed (blank) panel.
+  useEffect(() => {
+    if (panel === "watch") setPanel("play");
+  }, [panel, setPanel]);
 
   const checkEnv = useCallback(async () => {
     try {
@@ -98,8 +104,8 @@ export default function App() {
     if (panelId === "train" || panelId === "benchmark") {
       return running.includes(panelId);
     }
-    if (panelId === "watch") {
-      return running.some(p => p.startsWith("watch-") || p === "play-manual");
+    if (panelId === "play") {
+      return running.includes("play-watch");
     }
     return false;
   };
@@ -228,7 +234,7 @@ export default function App() {
           </nav>
 
           <div className="sidebar-footer">
-            <span className="version-tag">v1.0.0</span>
+            <span className="version-tag">v2.0.0</span>
             <button
               className="btn-quit"
               onClick={async () => {
@@ -259,11 +265,11 @@ export default function App() {
               />
             </div>
 
-            <div style={{ display: panel === "watch" ? "block" : "none" }}>
-              <WatchPanel
+            <div style={{ display: panel === "play" ? "block" : "none" }}>
+              <PlayPanel
+                isActive={panel === "play"}
                 projectRoot={projectRoot}
                 runningList={running}
-                isActive={panel === "watch"}
               />
             </div>
 

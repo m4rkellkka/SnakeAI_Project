@@ -38,7 +38,9 @@ export default function ModelsPanel({ projectRoot, isActive }) {
               ...hist 
             });
           }
-        } catch(e) {}
+        } catch(e) {
+          console.error(`Failed to load history for ${cp}:`, e);
+        }
       }
       // Sort by creation date descending
       loadedModels.sort((a, b) => (b.creation_date || 0) - (a.creation_date || 0));
@@ -84,6 +86,7 @@ export default function ModelsPanel({ projectRoot, isActive }) {
     await invoke("start_process", { id: "init_model", args, cwd: projectRoot });
     
     setTimeout(loadModels, 1500);
+    setTimeout(loadModels, 3000);
     setIsCreating(false);
     setRunName("");
   };

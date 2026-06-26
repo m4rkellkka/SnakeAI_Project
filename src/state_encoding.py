@@ -73,14 +73,10 @@ def encode_state(game):
         state[5, vy, vx] = min(cnt, VISIT_COUNT_CAP) / VISIT_COUNT_CAP
 
     # Channels 6–9: absolute direction (one-hot, not rotated!)
-    # Compass fix: direction is encoded separately (absolute, not egocentric).
-    # This lets the network distinguish cycle turns that depend on absolute
-    # position (even/odd columns in the serpentine grid), not just local patterns.
     dir_idx = [Direction.UP, Direction.LEFT, Direction.DOWN, Direction.RIGHT].index(game.direction)
     state[6 + dir_idx, :, :] = 1.0
 
     # Egocentric view for channels 0–5: rotate so head faces "up".
-    # Channel 5 (visited) is positional, so it rotates with the egocentric block.
     # Channels 6–9 (direction) remain in absolute coordinates.
     if game.direction == Direction.RIGHT:
         state[:6] = np.rot90(state[:6], k=1, axes=(1, 2))

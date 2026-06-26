@@ -7,10 +7,7 @@ const PROC_META = {
   "train":            { label: "Training",          panel: "train",     icon: "⚡" },
   "benchmark":        { label: "Benchmark",         panel: "benchmark", icon: "📊" },
   "init_model":       { label: "Initializing model", panel: "models",    icon: "✨" },
-  "watch-pretrained": { label: "Watch · Pretrained", panel: "watch",     icon: "🏆" },
-  "watch-checkpoint": { label: "Watch · Checkpoint", panel: "watch",     icon: "💾" },
-  "watch-teacher":    { label: "Watch · Teacher",    panel: "watch",     icon: "📐" },
-  "play-manual":      { label: "Play Manually",      panel: "watch",     icon: "🎮" },
+  "play-watch":       { label: "Watch AI",          panel: "play",      icon: "🤖" },
 };
 
 const metaFor = (id) => PROC_META[id] || { label: id, panel: null, icon: "›" };

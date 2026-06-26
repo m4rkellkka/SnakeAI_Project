@@ -141,7 +141,7 @@ export default function SettingsPanel() {
           </div>
           <div className="settings-row">
             <div className="settings-label">Version</div>
-            <div className="settings-value">1.0.0</div>
+            <div className="settings-value">2.0.0</div>
           </div>
         </div>
 
