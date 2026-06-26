@@ -74,7 +74,7 @@ This project trains a neural network to play Snake by learning from a rule-based
 - **Hamiltonian cycle teacher** with corner-cutting shortcuts (provably collision-free)
 - **Full reproducibility** — includes pretrained checkpoint + training logs
 - **Hyperparameter sweeps & benchmarking** — CLI overrides (`--lr`, `--dagger-prob-max`, `--curriculum-prob`, `--run-name`) for isolated, comparable runs, plus `tools/benchmark.py` for head-to-head checkpoint comparison
-- **Tauri desktop app** — self-contained GUI (`app/`) with live training charts, four panels (Train / Watch AI / Benchmark / Models), and per-process management; no Python install exposed to the user
+- **Tauri desktop app** — self-contained GUI (`app/`) with live training charts, five panels (Train / Play / Benchmark / Models / Settings), in-app Canvas rendering, and per-process management; no Python install exposed to the user
 
 ### UI Gallery (Before & After)
 
@@ -106,7 +106,7 @@ This project trains a neural network to play Snake by learning from a rule-based
 
 - **Channels 0–5 (egocentric, rotated):** head, body, food, danger map (walls + body), board-fullness, visit history
   - Rotated so snake's head always faces "up" (egocentric perspective)
-  - Channel 5 (visit history): binary map of head positions since last apple — helps detect looping
+  - Channel 5 (visit history): normalized visit count per cell since last apple (capped at 4) — helps detect looping
 - **Channels 6–9 (absolute, non-rotated):** one-hot absolute direction (compass fix)
   - Lets network distinguish turns by absolute grid position, not just local patterns
 
@@ -132,7 +132,7 @@ Relative to current heading: `[straight, turn right, turn left]` (not absolute d
 
 #### DAgger-lite & Curriculum
 
-- **DAgger:** ~0–30% of steps use network's action (ramped over 100k steps), exposing distribution shift
+- **DAgger:** 0–70% of steps use network's action (ramped over 100k steps), exposing distribution shift
 - **Curriculum:** After 150 games, 20% of episodes start with snakes of length 4–50 (late-game states)
 
 #### Pipeline Overview
@@ -244,12 +244,13 @@ npm run tauri dev # dev mode with hot-reload
 # or: npm run tauri build  →  produces a native .app / installer
 ```
 
-Full-featured dark-theme dashboard with four panels:
+Full-featured dark-theme dashboard with five panels:
 
 - **Train** — start/stop training with live score + eval charts and a colored log
-- **Watch AI** — one-click buttons for pretrained model, your checkpoint, teacher, or manual play (each opens its own Pygame window)
+- **Play** — in-app Canvas game with two modes: **You** (pure-JS engine, WASD/arrows) and **Watch AI** (streams `src/stream_game.py` for Pretrained / Best checkpoint / Teacher); speed changeable mid-game in both modes
 - **Benchmark** — run N games with configurable checkpoint/seed/unstick toggle
 - **Models** — list all named runs, view per-run training history charts, create new sweep runs with custom LR / DAgger prob / curriculum prob
+- **Settings** — app configuration and environment status
 
 Requires: [Node.js](https://nodejs.org) ≥ 18 and [Rust](https://rustup.rs) (for `cargo`/Tauri CLI).
 
@@ -295,6 +296,9 @@ Runs N games per checkpoint and reports full score distributions (mean/median/st
 | `src/train_ai.py` | Network (`SnakeNet`), replay buffer, trainer, agent, main training/eval loop |
 | `src/play_manual.py` | Human-playable Snake (WASD / Arrow keys), same Pygame window |
 | `src/export_history.py` | Reads a checkpoint and dumps training history as JSON — used by Tauri's Models panel |
+| `src/stream_game.py` | Headless game streamer: runs a checkpoint or teacher, prints JSON frames — powers the Tauri Play panel's Watch AI |
+| `src/state_encoding.py` | Shared 10-channel state encoding used by both `train_ai.py` (BC) and `train_rl.py` (RL) |
+| `src/train_rl.py` | Reinforcement learning trainer (Double DQN with Dueling head) — self-learning method, no teacher labels |
 | `app/` | Tauri v2 desktop app (React 19 frontend + Rust backend) — full GUI control panel |
 | `launcher.py` | Legacy Tkinter control panel |
 | `tools/record_demo.py` | Utility to record gameplay as animated GIFs |
@@ -314,7 +318,7 @@ Runs N games per checkpoint and reports full score distributions (mean/median/st
 
 - `play_step(action)` — Single game step; returns (game_over, score)
 - `safe_moves()` — Computes which of the 3 actions avoid immediate collision
-- `get_state(game)` — Builds 9-channel state with rotation and compass encoding
+- `get_state(game)` — Builds 10-channel state with rotation and compass encoding
 - `get_network_action(state, game)` — Forward pass + safe_moves masking
 - `get_best_move(game)` — Teacher's Hamiltonian-cycle logic with shortcuts
 
@@ -331,7 +335,7 @@ Runs N games per checkpoint and reports full score distributions (mean/median/st
 **Network Architecture** (in `SnakeNet.__init__`):
 
 - Modify conv layer channels, fully-connected layer sizes, etc.
-- Input: 9 channels, output: 3 logits (must match action space)
+- Input: 10 channels, output: 3 logits (must match action space)
 
 ### Troubleshooting
 
@@ -353,24 +357,29 @@ Runs N games per checkpoint and reports full score distributions (mean/median/st
 
 ### Roadmap
 
-#### 🚀 Version 1.0 (Current)
+#### 🚀 Version 1.0
 
-The behavioral cloning baseline is feature-complete. Key deliverables shipped:
+The behavioral cloning baseline — feature-complete:
 
-- ✅ **Tauri desktop app** — dark-theme GUI with live training charts, Train/Watch AI/Benchmark/Models panels, and per-process management
+- ✅ **Tauri desktop app** — dark-theme GUI with live training charts and per-process management
 - ✅ **Documentation** — Table of Contents, Mermaid pipeline diagram, dual-language READMEs
 - ✅ **Hyperparameter sweeps** — named runs, CLI overrides, isolated checkpoints with `run_config` traceability
 - ✅ **Benchmark tooling** — full score distributions, seed-locked head-to-head checkpoint comparison
 - ✅ **Honest evaluation** — separate eval loop (no teacher), stuck-rate tracking, best-checkpoint preservation
-- **Standalone installer** (bundle Python via sidecar) — deferred to a future release
 
-#### 🧠 Version 2.0 (New Training Paradigms)
-After v1.0, the focus shifts to entirely new methods of training beyond imitation learning.
-- **Reinforcement Learning (RL)** — Implement DQN/PPO trained from scratch (`src/train_rl.py`), adding a reward wrapper without breaking the existing environment API.
+#### 🧠 Version 2.0 (Current)
+
+New training paradigms beyond imitation learning, plus a redesigned desktop app:
+
+- ✅ **Reinforcement Learning (RL)** — Double DQN with Dueling head (`src/train_rl.py`), learns from reward signal with no teacher labels; shared state encoding with BC via `src/state_encoding.py`
+- ✅ **In-app Play panel** — Canvas-rendered game with You (pure-JS engine) and Watch AI (JSON game streamer) modes, replacing the old Pygame-window Watch panel
+- ✅ **JSON game streamer** — headless `src/stream_game.py` streams game frames as JSON for the Tauri frontend
+- ✅ **Settings panel** — app configuration and environment status
 - **Multi-snake Environment** — Generalize the grid for N snakes (snake-vs-snake collisions, shared food, opponent-aware state channels).
 - **Self-play / AI vs AI** — Train agents against each other in the new environment.
 - **Ensemble Benchmarking** — Compare BC, RL, and self-play models head-to-head via the benchmark harness.
 - **Obstacles & Custom Boards** — Since the Hamiltonian teacher can't handle random obstacles, RL agents will step up to learn dynamic obstacle avoidance.
+- **Standalone installer** (bundle Python via sidecar) — deferred to a future release.
 
 #### 🎮 Future Expansions
 - **Human vs AI mode** — Extend `play_manual.py` to the multi-snake environment.
