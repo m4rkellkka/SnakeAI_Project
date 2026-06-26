@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
+#[cfg(unix)]
 use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
@@ -104,8 +105,18 @@ fn install_deps(
         py = python
     );
 
+    #[cfg(unix)]
     let mut child = Command::new("/bin/sh")
         .args(["-c", &cmd])
+        .current_dir(&cwd)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Failed to start install: {}", e))?;
+
+    #[cfg(windows)]
+    let mut child = Command::new("cmd")
+        .args(["/C", &cmd])
         .current_dir(&cwd)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -169,66 +180,99 @@ fn open_url(url: String) {
 }
 
 fn find_python(base: &str) -> String {
-    // Prefer a project-local venv — guarantees the right packages regardless of system state
+    // Prefer a project-local venv
+    #[cfg(unix)]
     let venv = std::path::Path::new(base).join(".venv").join("bin").join("python3");
+    #[cfg(windows)]
+    let venv = std::path::Path::new(base).join(".venv").join("Scripts").join("python.exe");
+
     if venv.exists() {
         return venv.to_string_lossy().to_string();
     }
 
-    // Fallback: use a login shell so PATH matches the user's terminal (homebrew, pyenv, etc.)
-    let via_shell = Command::new("/bin/zsh")
-        .args(["-l", "-c", "which python3"])
-        .output()
-        .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty());
+    #[cfg(unix)]
+    {
+        let via_shell = Command::new("/bin/zsh")
+            .args(["-l", "-c", "which python3"])
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
 
-    if let Some(p) = via_shell {
-        return p;
+        if let Some(p) = via_shell {
+            return p;
+        }
+
+        Command::new("which")
+            .arg("python3")
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "python3".to_string())
     }
 
-    Command::new("which")
-        .arg("python3")
-        .output()
-        .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "python3".to_string())
+    #[cfg(windows)]
+    {
+        Command::new("where")
+            .arg("python")
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .and_then(|s| s.lines().next().map(|l| l.trim().to_string()))
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "python".to_string())
+    }
 }
 
 fn kill_pid(pid: u32) {
-    // Kill the whole process group so child processes (python, torch) die too.
-    Command::new("kill")
-        .args(["-TERM", &format!("-{}", pid)])
-        .output()
-        .ok();
-    Command::new("kill")
-        .args(["-TERM", &pid.to_string()])
-        .output()
-        .ok();
-    let pid_copy = pid;
-    std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(300));
+    #[cfg(unix)]
+    {
         Command::new("kill")
-            .args(["-KILL", &format!("-{}", pid_copy)])
+            .args(["-TERM", &format!("-{}", pid)])
             .output()
             .ok();
         Command::new("kill")
-            .args(["-KILL", &pid_copy.to_string()])
+            .args(["-TERM", &pid.to_string()])
             .output()
             .ok();
-    });
+        let pid_copy = pid;
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            Command::new("kill")
+                .args(["-KILL", &format!("-{}", pid_copy)])
+                .output()
+                .ok();
+            Command::new("kill")
+                .args(["-KILL", &pid_copy.to_string()])
+                .output()
+                .ok();
+        });
+    }
+
+    #[cfg(windows)]
+    {
+        Command::new("taskkill")
+            .args(["/F", "/T", "/PID", &pid.to_string()])
+            .output()
+            .ok();
+    }
 }
 
 fn is_valid_project_root(path: &str) -> bool {
     std::path::Path::new(path).join("src").join("train_ai.py").exists()
 }
 
+fn home_dir() -> String {
+    std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap_or_else(|_| std::env::temp_dir().to_string_lossy().to_string())
+}
+
 fn config_file_path() -> std::path::PathBuf {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-    std::path::Path::new(&home).join(".snake_ai_project_root")
+    std::path::Path::new(&home_dir()).join(".snake_ai_project_root")
 }
 
 #[tauri::command]
@@ -255,7 +299,7 @@ fn get_project_root() -> String {
     }
 
     // 3. Try common locations
-    let home = std::env::var("HOME").unwrap_or_default();
+    let home = home_dir();
     let candidates = [
         format!("{}/Documents/GitHub/SnakeAI_Project", home),
         format!("{}/SnakeAI_Project", home),
@@ -303,14 +347,15 @@ fn start_process(
 
     let python = find_python(&cwd);
 
-    let mut child = Command::new(&python)
-        .args(&args)
+    let mut cmd = Command::new(&python);
+    cmd.args(&args)
         .current_dir(&cwd)
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .process_group(0)
-        .spawn()
-        .map_err(|e| format!("Failed to spawn python3: {}", e))?;
+        .stderr(Stdio::piped());
+    #[cfg(unix)]
+    cmd.process_group(0);
+    let mut child = cmd.spawn()
+        .map_err(|e| format!("Failed to spawn python: {}", e))?;
 
     let pid = child.id();
     let stdout = child.stdout.take();
